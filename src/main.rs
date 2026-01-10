@@ -49,25 +49,27 @@ async fn main() -> Result<()> {
     }
     
     // Select target network
-    let target_index = if let Some(index) = args.target {
-        if index >= networks.len() {
-            println!("{}", "Invalid network index!".red());
-            return Ok(());
+    let target = if let Some(ssid) = args.ssid {
+        match networks.iter().find(|n| n.ssid == ssid) {
+            Some(network) => network,
+            None => {
+                println!("{}", format!("Network '{}' not found!", ssid).red());
+                return Ok(());
+            }
         }
-        index
     } else {
-        println!("{}", "Select target network index:".bold());
+        println!("{}", "Enter target network SSID:".bold());
         let mut input = String::new();
         std::io::stdin().read_line(&mut input)?;
-        let index: usize = input.trim().parse()?;
-        if index >= networks.len() {
-            println!("{}", "Invalid network index!".red());
-            return Ok(());
+        let ssid = input.trim();
+        match networks.iter().find(|n| n.ssid == ssid) {
+            Some(network) => network,
+            None => {
+                println!("{}", format!("Network '{}' not found!", ssid).red());
+                return Ok(());
+            }
         }
-        index
     };
-    
-    let target = &networks[target_index];
     let confidence = (target.numeric_confidence() * 100.0) as u32;
     
     println!("\n{}", format!("Target: {} ({})", target.ssid, target.security).bold().yellow());

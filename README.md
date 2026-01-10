@@ -56,7 +56,7 @@ cargo build --release
 # Binary will be at: target/release/bruteforce-wifi
 ```
 
-#### Option 3: Ultra-Optimized Build (14x faster!)
+#### Option 3: Ultra-Optimized Build
 
 ```bash
 # Build with CPU-specific optimizations for maximum performance
@@ -70,7 +70,7 @@ RUSTFLAGS="-C target-cpu=native" cargo build --release
 sudo bruteforce-wifi wordlist ./passwords.txt
 
 # Target specific network with numeric combinations (8 digits)
-sudo bruteforce-wifi --target 0 numeric --min 8 --max 8
+sudo bruteforce-wifi --ssid "TP-Link_5GHz" numeric --min 8 --max 8
 
 # Show help
 bruteforce-wifi --help
@@ -139,47 +139,47 @@ This will:
 ### Target Specific Network
 
 ```bash
-# Target network at index 0 with wordlist
-sudo bruteforce-wifi --target 0 wordlist ./passwords.txt
+# Target network by SSID with wordlist
+sudo bruteforce-wifi --ssid "TP-Link_5GHz" wordlist ./passwords.txt
 
-# Target network at index 0 with numeric combinations (8 digits)
-sudo bruteforce-wifi --target 0 numeric --min 8 --max 8
+# Target network by SSID with numeric combinations (8 digits)
+sudo bruteforce-wifi --ssid "TP-Link_5GHz" numeric --min 8 --max 8
 ```
 
 ### Numeric Combination Examples
 
 ```bash
 # Test 4-digit combinations (0000-9999)
-sudo bruteforce-wifi --target 0 numeric --min 4 --max 4
+sudo bruteforce-wifi --ssid "MyNetwork" numeric --min 4 --max 4
 
 # Test 8-digit combinations (00000000-99999999)
-sudo bruteforce-wifi --target 0 numeric --min 8 --max 8
+sudo bruteforce-wifi --ssid "TP-Link_5GHz" numeric --min 8 --max 8
 
 # Test range from 6 to 8 digits
-sudo bruteforce-wifi --target 0 numeric --min 6 --max 8
+sudo bruteforce-wifi --ssid "D-Link_2.4G" numeric --min 6 --max 8
 ```
 
 ### Wordlist Examples
 
 ```bash
 # Use a wordlist file
-sudo bruteforce-wifi --target 0 wordlist ./my_passwords.txt
+sudo bruteforce-wifi --ssid "MyNetwork" wordlist ./my_passwords.txt
 
 # Use a downloaded wordlist (e.g., from SecLists)
-sudo bruteforce-wifi --target 0 wordlist ./rockyou.txt
+sudo bruteforce-wifi --ssid "TP-Link_5GHz" wordlist ./rockyou.txt
 ```
 
 ### Advanced Options
 
 ```bash
 # Use specific number of threads
-sudo bruteforce-wifi --target 0 --threads 16 wordlist ./passwords.txt
+sudo bruteforce-wifi --ssid "TP-Link_5GHz" --threads 16 wordlist ./passwords.txt
 
 # Verbose output
-sudo bruteforce-wifi --target 0 --verbose numeric --min 8 --max 8
+sudo bruteforce-wifi --ssid "TP-Link_5GHz" --verbose numeric --min 8 --max 8
 
 # Set timeout for each connection attempt
-sudo bruteforce-wifi --target 0 --timeout 10 wordlist ./passwords.txt
+sudo bruteforce-wifi --ssid "MyNetwork" --timeout 10 wordlist ./passwords.txt
 ```
 
 ---
@@ -193,7 +193,7 @@ Arguments:
   <MODE>  Bruteforce mode [possible values: wordlist, numeric]
 
 Options:
-  -t, --target <INDEX>       Target network index (from scan list)
+  -s, --ssid <SSID>          Target network SSID
   -j, --threads <NUM>        Number of threads to use (default: CPU count)
   -T, --timeout <SECONDS>    Timeout in seconds for each connection attempt [default: 5]
   -v, --verbose              Verbose output
@@ -250,28 +250,28 @@ sudo setcap cap_net_admin+ep /usr/local/bin/bruteforce-wifi
 
 ---
 
-## 🎯 Cas d'Usage Typique : TP-Link avec Mot de Passe 8 Chiffres
+## 🎯 Typical Use Case: TP-Link with 8-Digit Password
 
-### Contexte
+### Context
 
-Les routeurs **TP-Link** (et autres marques similaires) sont livrés avec un mot de passe WiFi **par défaut de 8 chiffres numériques**. Ces mots de passe sont imprimés sur une étiquette au dos du routeur.
+**TP-Link** routers (and similar brands) ship with a default **8-digit numeric WiFi password**. These passwords are printed on a label on the back of the router.
 
-**Pourquoi c'est pertinent ?**
+**Why is this relevant?**
 
-- ✅ **Très courant** : Millions de routeurs TP-Link, D-Link, Netgear vendus
-- ✅ **Rarement changé** : Beaucoup d'utilisateurs gardent le mot de passe par défaut
-- ✅ **Espace réduit** : Seulement 100 millions de combinaisons (00000000-99999999)
-- ✅ **Bruteforce faisable** : Avec les optimisations, c'est réaliste
+- ✅ **Very common**: Millions of TP-Link, D-Link, Netgear routers sold
+- ✅ **Rarely changed**: Many users keep the default password
+- ✅ **Reduced space**: Only 100 million combinations (00000000-99999999)
+- ✅ **Bruteforce feasible**: With optimizations, it's realistic
 
-### Détection Automatique
+### Automatic Detection
 
-L'outil **détecte automatiquement** les réseaux TP-Link :
+The tool **automatically detects** TP-Link networks:
 
 ```bash
 sudo bruteforce-wifi wordlist /dev/null
 ```
 
-Vous verrez :
+You will see:
 
 ```text
 Available networks:
@@ -286,44 +286,44 @@ Top 3 networks most likely to have numeric passwords:
   2. D-Link_2.4G - Confidence: 60%
 ```
 
-**Critères de détection :**
+**Detection criteria:**
 
-- 🔍 Nom contenant "TP-Link", "D-Link", "Netgear", etc.
-- 🔍 Adresse MAC (OUI) des fabricants connus
-  - TP-Link : `14:CC:20`, `F4:EC:38`, `50:C7:BF`, etc.
-  - D-Link : `00:1A:2B`, `00:1E:58`
-  - Et 20+ autres fabricants
-- 🔍 Patterns dans le SSID (WIFI_XXXX, BOX_XXXX, etc.)
+- 🔍 Name containing "TP-Link", "D-Link", "Netgear", etc.
+- 🔍 MAC address (OUI) of known manufacturers
+  - TP-Link: `14:CC:20`, `F4:EC:38`, `50:C7:BF`, etc.
+  - D-Link: `00:1A:2B`, `00:1E:58`
+  - And 20+ other manufacturers
+- 🔍 Patterns in SSID (WIFI_XXXX, BOX_XXXX, etc.)
 
-### Exemple Pratique
+### Practical Example
 
 ```bash
-# 1. Scanner les réseaux (détection automatique TP-Link)
+# 1. Scan networks (automatic TP-Link detection)
 sudo bruteforce-wifi wordlist /dev/null
-# Ctrl+C après avoir vu la liste
+# Ctrl+C after seeing the list
 
-# 2. Lancer le bruteforce sur le réseau TP-Link détecté (index 0)
-sudo bruteforce-wifi --target 0 numeric --min 8 --max 8
+# 2. Launch bruteforce on the detected TP-Link network
+sudo bruteforce-wifi --ssid "TP-Link_5GHz" numeric --min 8 --max 8
 ```
 
 
-### Pourquoi 8 Chiffres ?
+### Why 8 Digits?
 
-Format typique TP-Link : `12345678`, `87654321`, `00112233`, etc.
+Typical TP-Link format: `12345678`, `87654321`, `00112233`, etc.
 
-- ✅ Facile à imprimer sur étiquette
-- ✅ Facile à taper (clavier numérique)
-- ✅ "Sécurisé" selon les fabricants (100M combinaisons)
-- ❌ **Mais bruteforçable** avec cet outil optimisé !
+- ✅ Easy to print on label
+- ✅ Easy to type (numeric keypad)
+- ✅ "Secure" according to manufacturers (100M combinations)
+- ❌ **But bruteforceable** with this optimized tool!
 
-### Protection Recommandée
+### Recommended Protection
 
-Si vous avez un routeur TP-Link ou similaire :
+If you have a TP-Link or similar router:
 
-1. ✅ **Changez le mot de passe immédiatement**
-2. ✅ Utilisez au moins 12 caractères alphanumériques
-3. ✅ Activez WPA3 si disponible
-4. ✅ Désactivez WPS
+1. ✅ **Change the password immediately**
+2. ✅ Use at least 12 alphanumeric characters
+3. ✅ Enable WPA3 if available
+4. ✅ Disable WPS
 
 ---
 
@@ -341,53 +341,53 @@ Bruteforce Speed:     2000-5000+ attempts/second (hardware-dependent)
 
 ## 🔧 GitHub Actions & Release
 
-Ce projet utilise GitHub Actions pour automatiser les releases et la mise à jour Homebrew.
+This project uses GitHub Actions to automate releases and Homebrew updates.
 
-### Workflow de Release (`.github/workflows/release.yml`)
+### Release Workflow (`.github/workflows/release.yml`)
 
-Lors d'un push de tag `v*`, le workflow:
+On a tag push `v*`, the workflow:
 
-1. **Build multi-plateforme**
+1. **Multi-platform build**
    - Linux x86_64
    - macOS x86_64
    - macOS ARM64 (Apple Silicon)
 
-2. **Génération automatique**
-   - Création des archives `.tar.gz`
-   - Calcul des checksums SHA256
-   - Upload des artifacts
+2. **Automatic generation**
+   - Creation of `.tar.gz` archives
+   - Calculation of SHA256 checksums
+   - Upload of artifacts
 
-3. **Création de la release**
-   - Notes de release formatées
-   - Binaires pour chaque plateforme
-   - Fichiers SHA256SUMS
+3. **Release creation**
+   - Formatted release notes
+   - Binaries for each platform
+   - SHA256SUMS files
 
-### Créer une Release
+### Creating a Release
 
 ```bash
-# 1. Update version dans Cargo.toml si nécessaire
-# 2. Commit les changements
+# 1. Update version in Cargo.toml if necessary
+# 2. Commit changes
 git add .
 git commit -m "Release v1.0.0"
 git push origin master
 
-# 3. Créer et pusher le tag
+# 3. Create and push the tag
 git tag v1.0.0
 git push origin v1.0.0
 ```
 
-Le workflow GitHub Actions se déclenche automatiquement et crée la release !
+The GitHub Actions workflow triggers automatically and creates the release!
 
-### Workflow Homebrew (`.github/workflows/update-bruteforce-wifi.yml`)
+### Homebrew Workflow (`.github/workflows/update-bruteforce-wifi.yml`)
 
-Déclenché automatiquement après publication d'une release:
+Automatically triggered after a release is published:
 
-1. Télécharge les binaires de la release
-2. Calcule les SHA256 pour chaque plateforme
-3. Met à jour la formule Homebrew dans `maxgfr/homebrew-tap`
-4. Commit et push automatiquement
+1. Downloads release binaries
+2. Calculates SHA256 for each platform
+3. Updates Homebrew formula in `maxgfr/homebrew-tap`
+4. Commits and pushes automatically
 
-**Configuration requise**: Secret `HOMEBREW_TAP_TOKEN` avec permissions `repo`
+**Required configuration**: Secret `HOMEBREW_TAP_TOKEN` with `repo` permissions
 
 ---
 
