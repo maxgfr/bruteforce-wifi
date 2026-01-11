@@ -79,10 +79,28 @@ jobs:
         run: |
           VERSION=${GITHUB_REF#refs/tags/}
 
+          # Get commits since last tag
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+
+          # Generate changelog from conventional commits
+          FEATURES=$(git log ${PREV_TAG:+$PREV_TAG..}HEAD --pretty=format:"%s" --no-merges | grep -E "^feat(\(.*\))?:" | sed 's/^feat\(([^)]*)\)\?: /- /' || echo "")
+          FIXES=$(git log ${PREV_TAG:+$PREV_TAG..}HEAD --pretty=format:"%s" --no-merges | grep -E "^fix(\(.*\))?:" | sed 's/^fix\(([^)]*)\)\?: /- /' || echo "")
+          CHORES=$(git log ${PREV_TAG:+$PREV_TAG..}HEAD --pretty=format:"%s" --no-merges | grep -E "^chore(\(.*\))?:" | sed 's/^chore\(([^)]*)\)\?: /- /' || echo "")
+          DOCS=$(git log ${PREV_TAG:+$PREV_TAG..}HEAD --pretty=format:"%s" --no-merges | grep -E "^docs(\(.*\))?:" | sed 's/^docs\(([^)]*)\)\?: /- /' || echo "")
+          PERF=$(git log ${PREV_TAG:+$PREV_TAG..}HEAD --pretty=format:"%s" --no-merges | grep -E "^perf(\(.*\))?:" | sed 's/^perf\(([^)]*)\)\?: /- /' || echo "")
+
           cat > release_notes.md << EOF
           ## 📡 Bruteforce WiFi $VERSION
 
           **⚠️ EDUCATIONAL USE ONLY - UNAUTHORIZED ACCESS IS ILLEGAL ⚠️**
+
+          ### 📝 Changelog
+
+          $(if [ -n "$FEATURES" ]; then echo "#### ✨ Features"; echo "$FEATURES"; echo ""; fi)
+          $(if [ -n "$FIXES" ]; then echo "#### 🐛 Bug Fixes"; echo "$FIXES"; echo ""; fi)
+          $(if [ -n "$PERF" ]; then echo "#### ⚡ Performance Improvements"; echo "$PERF"; echo ""; fi)
+          $(if [ -n "$DOCS" ]; then echo "#### 📚 Documentation"; echo "$DOCS"; echo ""; fi)
+          $(if [ -n "$CHORES" ]; then echo "#### 🔧 Chores"; echo "$CHORES"; echo ""; fi)
 
           ### 📥 Installation
 
@@ -102,15 +120,12 @@ jobs:
 
           ### 🚀 Quick Start
           \`\`\`bash
-          # Scan networks and run wordlist attack
-          sudo bruteforce-wifi wordlist ./passwords.txt
+          # List available networks
+          sudo bruteforce-wifi list
 
-          # Scan networks and run numeric attack (8 digits)
-          sudo bruteforce-wifi --target 0 numeric --min 8 --max 8
+          # Target specific network with numeric attack (8 digits)
+          sudo bruteforce-wifi --ssid "TP-Link_5GHz" numeric --min 8 --max 8
           \`\`\`
-
-          ### 📝 Changelog
-          See [CHANGELOG.md](https://github.com/maxgfr/bruteforce-wifi/blob/main/CHANGELOG.md) for details.
 
           ### ✅ Checksums
           SHA256 checksums are available in the \`SHA256SUMS\` files.

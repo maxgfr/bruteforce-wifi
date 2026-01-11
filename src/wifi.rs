@@ -300,20 +300,65 @@ fn scan_networks_sync() -> Result<Vec<WifiNetwork>> {
     }
 }
 
-/// Scan WiFi networks on macOS using the airport command
+/// Scan WiFi networks on macOS using the airport command or system_profiler
 #[cfg(target_os = "macos")]
 fn scan_networks_macos() -> Result<Vec<WifiNetwork>> {
-    let output = Command::new("/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport")
-        .arg("-s")
-        .output()
-        .context("Failed to scan WiFi networks")?;
-    
-    if !output.status.success() {
-        return Err(anyhow::anyhow!("Airport scan failed"));
+    // Try multiple locations for the airport command (macOS has changed this over time)
+    let airport_paths = [
+        "/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport",
+        "/System/Volumes/Data/usr/local/bin/airport",
+        "/usr/local/bin/airport",
+        "airport", // Try in PATH
+    ];
+
+    let mut last_error = None;
+
+    for path in &airport_paths {
+        match Command::new(path)
+            .arg("-s")
+            .output() {
+            Ok(output) if output.status.success() => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                return parse_airport_output(&stdout);
+            }
+            Ok(_) => {
+                last_error = Some(anyhow::anyhow!("Airport command failed at {}", path));
+            }
+            Err(e) => {
+                last_error = Some(anyhow::anyhow!("Failed to execute {}: {}", path, e));
+            }
+        }
     }
-    
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_airport_output(&stdout)
+
+    // If all airport attempts failed, try system_profiler as fallback
+    match Command::new("system_profiler")
+        .args(["SPAirPortDataType"])
+        .output() {
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            return parse_system_profiler_output(&stdout);
+        }
+        Ok(_) => {
+            last_error = Some(anyhow::anyhow!("system_profiler command failed"));
+        }
+        Err(e) => {
+            last_error = Some(anyhow::anyhow!("Failed to execute system_profiler: {}", e));
+        }
+    }
+
+    // If all attempts failed, provide helpful error message
+    Err(anyhow::anyhow!(
+        "Could not scan WiFi networks on macOS.\n\
+         Both 'airport' and 'system_profiler' commands failed.\n\
+         \n\
+         This may be due to:\n\
+         - macOS version compatibility (you're running macOS 26.2)\n\
+         - Missing system permissions\n\
+         - WiFi hardware not available\n\
+         \n\
+         Last error: {:?}",
+        last_error
+    ))
 }
 
 /// Scan WiFi networks on Linux using nmcli or iwlist
@@ -393,6 +438,129 @@ fn parse_airport_output(output: &str) -> Result<Vec<WifiNetwork>> {
         }
     }
 
+    Ok(networks)
+}
+
+/// Parse system_profiler SPAirPortDataType output (macOS fallback)
+#[cfg(target_os = "macos")]
+fn parse_system_profiler_output(output: &str) -> Result<Vec<WifiNetwork>> {
+    let mut networks = Vec::new();
+    let mut in_other_networks = false;
+    let mut current_ssid = String::new();
+    let mut current_rssi = -100i32;
+    let mut current_channel = 1u32;
+    let mut current_security = String::new();
+    
+    for line in output.lines() {
+        let trimmed = line.trim();
+        
+        // Look for "Other Local Wi-Fi Networks:" section
+        if trimmed.contains("Other Local Wi-Fi Networks:") {
+            in_other_networks = true;
+            continue;
+        }
+        
+        // Exit the section when we hit a new top-level section
+        if in_other_networks && !trimmed.is_empty() && !trimmed.starts_with("Other Local Wi-Fi Networks:") &&
+           !trimmed.starts_with("            ") && !trimmed.starts_with("      ") {
+            in_other_networks = false;
+            // Save the last network if we have one
+            if !current_ssid.is_empty() && current_ssid != "<redacted>" {
+                let signal_strength = ((current_rssi + 100) as f64 / 70.0 * 100.0).max(0.0).min(100.0);
+                networks.push(WifiNetwork {
+                    ssid: current_ssid.clone(),
+                    bssid: "N/A".to_string(),
+                    rssi: current_rssi,
+                    channel: current_channel,
+                    security: current_security.clone(),
+                    signal_strength,
+                    likely_numeric: false,
+                });
+            }
+            current_ssid.clear();
+            continue;
+        }
+        
+        // Parse network entries in the "Other Local Wi-Fi Networks" section
+        if in_other_networks {
+            // SSID line (indented with 12 spaces, ends with ":")
+            if trimmed.starts_with("            ") && trimmed.ends_with(':') && !trimmed.contains("PHY Mode") {
+                // Save the previous network if we have one
+                if !current_ssid.is_empty() && current_ssid != "<redacted>" {
+                    let signal_strength = ((current_rssi + 100) as f64 / 70.0 * 100.0).max(0.0).min(100.0);
+                    networks.push(WifiNetwork {
+                        ssid: current_ssid.clone(),
+                        bssid: "N/A".to_string(),
+                        rssi: current_rssi,
+                        channel: current_channel,
+                        security: current_security.clone(),
+                        signal_strength,
+                        likely_numeric: false,
+                    });
+                }
+                
+                // Extract SSID (everything before the colon)
+                current_ssid = trimmed[..trimmed.len() - 1].trim().to_string();
+                current_rssi = -100;
+                current_channel = 1;
+                current_security = "Unknown".to_string();
+            }
+            // Parse details lines (indented with 14 spaces)
+            else if trimmed.starts_with("              ") {
+                if trimmed.starts_with("Channel:") {
+                    // Extract channel (e.g., "Channel: 11 (2GHz, 20MHz)")
+                    if let Some(ch_end) = trimmed.find('(') {
+                        let channel_str = trimmed[8..ch_end].trim();
+                        current_channel = channel_str.parse::<u32>().unwrap_or(1);
+                    }
+                } else if trimmed.starts_with("Security:") {
+                    // Extract security (e.g., "Security: WPA2 Personal")
+                    current_security = trimmed[9..].trim().to_string();
+                } else if trimmed.starts_with("Signal / Noise:") {
+                    // Extract signal strength (e.g., "Signal / Noise: -83 dBm / -99 dBm")
+                    if let Some(dbm_start) = trimmed.find('-') {
+                        if let Some(dbm_end) = trimmed[dbm_start..].find("dBm") {
+                            let rssi_str = trimmed[dbm_start..dbm_start + dbm_end].trim();
+                            current_rssi = rssi_str.parse::<i32>().unwrap_or(-100);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Don't forget to add the last network
+    if !current_ssid.is_empty() && current_ssid != "<redacted>" {
+        let signal_strength = ((current_rssi + 100) as f64 / 70.0 * 100.0).max(0.0).min(100.0);
+        networks.push(WifiNetwork {
+            ssid: current_ssid.clone(),
+            bssid: "N/A".to_string(),
+            rssi: current_rssi,
+            channel: current_channel,
+            security: current_security.clone(),
+            signal_strength,
+            likely_numeric: false,
+        });
+    }
+    
+    // If all networks were redacted, provide a helpful error message
+    if networks.is_empty() {
+        return Err(anyhow::anyhow!(
+            "WiFi networks were found, but SSIDs are redacted by macOS for privacy reasons.\n\
+             \n\
+             On macOS 26 and later, the 'airport' command-line tool has been removed\n\
+             and 'system_profiler' redacts network names for security.\n\
+             \n\
+             To use this tool, you have a few options:\n\
+             1. Use an older version of macOS that still supports the airport command\n\
+             2. Install a third-party WiFi scanning tool\n\
+             3. Use the tool on Linux or Windows instead\n\
+             \n\
+             For educational purposes, you can test the password generation features\n\
+             without scanning by providing a target SSID manually."
+        ));
+    }
+    
     Ok(networks)
 }
 

