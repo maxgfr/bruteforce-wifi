@@ -24,11 +24,14 @@ impl ParallelPasswordGenerator {
     /// * `length` - Number of digits
     /// * `threads` - Number of threads (used to optimize batch size)
     pub fn new(length: usize, threads: usize) -> Self {
-        let start = 10u64.pow((length - 1) as u32);
-        let end = 10u64.pow(length as u32);
+        let start = 0; // Always start at 0 (e.g., 00000000)
+        let end = 10u64.pow(length as u32); // Full range: 10^length
 
         // Optimal batch size: balance between parallelism and overhead
-        let batch_size = (10000).max((end - start) as usize / (threads * 100));
+        // Cap at 1000 to ensure UI responsiveness (updates every ~0.5s at 2000 pwd/s)
+        let batch_size = 1000.min((end - start) as usize / threads);
+        // Ensure at least some batch size
+        let batch_size = batch_size.max(100);
 
         Self {
             start,

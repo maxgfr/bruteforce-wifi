@@ -3,6 +3,7 @@ mod bruteforce;
 mod password_gen;
 mod handshake;
 mod crypto;
+mod network;
 
 use anyhow::Result;
 use clap::Parser;
@@ -10,6 +11,7 @@ use colored::Colorize;
 
 use cli::{Args, Mode, CrackMethod};
 use bruteforce::{BruteforceConfig, bruteforce_wordlist, bruteforce_numeric};
+use network::capture_traffic;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -24,6 +26,9 @@ async fn main() -> Result<()> {
                 threads: args.threads.unwrap_or_else(num_cpus::get),
             };
             handle_crack_mode(method, &config).await?;
+        }
+        Mode::Capture { interface, channel, ssid, output, duration } => {
+            capture_traffic(&interface, channel, ssid.as_deref(), &output, duration)?;
         }
     }
 

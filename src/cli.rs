@@ -29,6 +29,32 @@ pub enum Mode {
         #[command(subcommand)]
         method: CrackMethod,
     },
+
+    /// Capture WiFi traffic (requires root/admin)
+    ///
+    /// Captures packets to a .cap file for later cracking.
+    /// Uses tcpdump (macOS/Linux) or available tools.
+    Capture {
+        /// Interface to capture on (e.g., en0, wlan0)
+        #[arg(short, long)]
+        interface: String,
+
+        /// Channel to listen on
+        #[arg(short, long)]
+        channel: Option<u32>,
+
+        /// Target SSID (required for deauth/filtering)
+        #[arg(short, long)]
+        ssid: Option<String>,
+
+        /// Output file name
+        #[arg(short, long, default_value = "capture.cap")]
+        output: String,
+
+        /// Duration in seconds (optional)
+        #[arg(long)]
+        duration: Option<u64>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -43,7 +69,7 @@ pub enum CrackMethod {
         #[arg(value_name = "HANDSHAKE")]
         handshake: PathBuf,
 
-        /// Network SSID (required for .cap files)
+        /// Network SSID (Optional if can be detected from .cap file)
         #[arg(long)]
         ssid: Option<String>,
 
@@ -57,13 +83,13 @@ pub enum CrackMethod {
     /// Generates and tests numeric passwords (e.g., 12345678).
     /// Useful for routers with default numeric passwords.
     ///
-    /// Example: bruteforce-wifi crack numeric handshake.cap --ssid MyNetwork --min 8 --max 8
+    /// Example: bruteforce-wifi crack numeric handshake.cap --min 8 --max 8
     Numeric {
         /// Path to handshake file (.cap or .json)
         #[arg(value_name = "HANDSHAKE")]
         handshake: PathBuf,
 
-        /// Network SSID (required for .cap files)
+        /// Network SSID (Optional if can be detected from .cap file)
         #[arg(long)]
         ssid: Option<String>,
 

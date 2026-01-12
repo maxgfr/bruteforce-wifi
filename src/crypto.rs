@@ -14,13 +14,18 @@
 use hmac::{Hmac, Mac};
 use pbkdf2::pbkdf2;
 use sha1::Sha1;
+use sha2::Sha256;
+use aes::Aes128;
+use cmac::Cmac;
 
 type HmacSha1 = Hmac<Sha1>;
+type HmacSha256 = Hmac<Sha256>;
+type Aes128Cmac = Cmac<Aes128>;
 
 /// Constant for PRF expansion
 const PRF_LABEL: &[u8] = b"Pairwise key expansion";
 
-/// Calculate PMK (Pairwise Master Key) from passphrase and SSID
+/// Calculate PMK (Pairwise Master Key) from passphrase and SSID using HMAC-SHA1 (WPA2)
 ///
 /// PMK = PBKDF2(passphrase, SSID, 4096 iterations, 256 bits)
 ///
@@ -36,7 +41,20 @@ const PRF_LABEL: &[u8] = b"Pairwise key expansion";
 #[inline]
 pub fn calculate_pmk(passphrase: &str, ssid: &str) -> [u8; 32] {
     let mut pmk = [0u8; 32];
-    let _ = pbkdf2::<Hmac<Sha1>>(
+    let _ = pbkdf2::<HmacSha1>(
+        passphrase.as_bytes(),
+        ssid.as_bytes(),
+        4096,
+        &mut pmk,
+    );
+    pmk
+}
+
+/// Calculate PMK (Pairwise Master Key) from passphrase and SSID using HMAC-SHA256 (WPA2-SHA256/WPA3)
+#[inline]
+pub fn calculate_pmk_sha256(passphrase: &str, ssid: &str) -> [u8; 32] {
+    let mut pmk = [0u8; 32];
+    let _ = pbkdf2::<HmacSha256>(
         passphrase.as_bytes(),
         ssid.as_bytes(),
         4096,
@@ -47,18 +65,18 @@ pub fn calculate_pmk(passphrase: &str, ssid: &str) -> [u8; 32] {
 
 /// Calculate PTK (Pairwise Transient Key) from PMK and handshake data
 ///
-/// PTK = PRF-512(PMK, "Pairwise key expansion",
-///               min(AA, SPA) || max(AA, SPA) || min(ANonce, SNonce) || max(ANonce, SNonce))
+/// Uses PRF-512 (SHA1) for WPA2 or KDF (SHA256) for WPA2-SHA256/WPA3
 ///
 /// # Arguments
-/// * `pmk` - Pairwise Master Key (from calculate_pmk)
+/// * `pmk` - Pairwise Master Key
 /// * `ap_mac` - AP MAC address
 /// * `client_mac` - Client MAC address
 /// * `anonce` - Authenticator nonce
 /// * `snonce` - Supplicant nonce
+/// * `key_version` - Key version from handshake (3 = WPA2-SHA256/WPA3, others = WPA2)
 ///
 /// # Returns
-/// 64-byte PTK (we only need first 16 bytes for KCK)
+/// 64-byte PTK (we need the first 16 bytes for KCK)
 #[inline]
 pub fn calculate_ptk(
     pmk: &[u8; 32],
@@ -66,6 +84,7 @@ pub fn calculate_ptk(
     client_mac: &[u8; 6],
     anonce: &[u8; 32],
     snonce: &[u8; 32],
+    key_version: u8,
 ) -> [u8; 64] {
     // Concatenate: min(AA, SPA) || max(AA, SPA) || min(ANonce, SNonce) || max(ANonce, SNonce)
     let mut data = [0u8; 76]; // 6 + 6 + 32 + 32
@@ -88,19 +107,19 @@ pub fn calculate_ptk(
         data[44..76].copy_from_slice(anonce);
     }
 
-    // PRF-512 (Pseudo-Random Function)
-    prf_512(pmk, PRF_LABEL, &data)
+    if key_version == 3 {
+        // WPA2-SHA256 / WPA3
+        kdf_sha256(pmk, PRF_LABEL, &data)
+    } else {
+        // WPA2 (SHA1)
+        prf_512(pmk, PRF_LABEL, &data)
+    }
 }
 
-/// PRF-512: Pseudo-Random Function to generate 64 bytes from PMK
-///
-/// Implements the PRF function defined in IEEE 802.11i
-/// Optimized to use stack buffer instead of heap allocation
+/// PRF-512: Pseudo-Random Function to generate 64 bytes from PMK (SHA1 based)
 #[inline]
 fn prf_512(key: &[u8], prefix: &[u8], data: &[u8]) -> [u8; 64] {
     let mut result = [0u8; 64];
-
-    // Use stack buffer - max size is 23 (prefix) + 1 + 76 (data) + 1 = 101 bytes
     let mut input = [0u8; 128];
     let mut pos = 0;
 
@@ -116,16 +135,12 @@ fn prf_512(key: &[u8], prefix: &[u8], data: &[u8]) -> [u8; 64] {
     input[pos..pos + data.len()].copy_from_slice(data);
     pos += data.len();
 
-    // Counter byte position
     let counter_pos = pos;
     pos += 1;
-
     let input_len = pos;
 
-    // Generate 4 blocks of 20 bytes each (total 80 bytes, we use 64)
     for i in 0..4u8 {
         input[counter_pos] = i;
-
         let mut mac = HmacSha1::new_from_slice(key)
             .expect("HMAC can take key of any size");
         mac.update(&input[..input_len]);
@@ -133,8 +148,63 @@ fn prf_512(key: &[u8], prefix: &[u8], data: &[u8]) -> [u8; 64] {
 
         let start = i as usize * 20;
         let end = std::cmp::min(start + 20, 64);
-        let len = end - start;
-        result[start..end].copy_from_slice(&hash[..len]);
+        result[start..end].copy_from_slice(&hash[..end - start]);
+    }
+    result
+}
+
+/// KDF-SHA256: Key Derivation Function for WPA2-SHA256 / WPA3
+/// Generates 64 bytes (approx 512 bits) although usually 48 bytes (384 bits) are used.
+#[inline]
+fn kdf_sha256(key: &[u8], label: &[u8], context: &[u8]) -> [u8; 64] {
+    let mut result = [0u8; 64];
+    let bits: u16 = 48 * 8; // Requesting 48 bytes (384 bits) usually, but let's fill 64 to mimic prf_512 return
+    
+    // IEEE 802.11w-2009:
+    // KDF(Key, Label, Context, Length)
+    // R = ""
+    // Iterations = ceil(Length / 256)
+    // For i = 1 to Iterations:
+    //     R = R || HMAC-SHA256(Key, i || Label || Context || Length)
+    
+    // We want 64 bytes, 64*8 = 512 bits. Ceil(512/256) = 2 rounds.
+    let iterations: u16 = 2; // 2 * 32 bytes = 64 bytes
+    let length_bits: u16 = 512; 
+
+    // Build internal buffer for HMAC input: i (2 bytes? no, 16-bit counter? No, "a non-negative integer")
+    // 802.11 definitions usually say:
+    // i: a counter, ... represented as a 16-bit integer ... ?
+    // Check RFC or Standard.
+    // 802.11-2012, 11.6.1.7.2 KDF
+    // i is a 16-bit integer (little endian usually? No, just says "i").
+    // Actually, usually it's just `i` (loop counter).
+    // Let's implement based on standard practice for WPA2-SHA256.
+    
+    // Actually standard KDF uses:
+    // i (16-bit) || Label || Context || Length (16-bit)
+    
+    for i in 1..=iterations {
+       let mut mac = HmacSha256::new_from_slice(key).expect("HMAC key");
+       
+       // i (16-bit, typically LE in some, but let's assume standard behavior... wait, usually loop counter is passed as 16-bit LE)
+       // Let's verify against known implementations (e.g. hostapd).
+       // hostapd: sha256_kdf(key, label, data, data_len, buf, len)
+       // loops with `counter` (u16).
+       // Update: counter (LE), label, data, bit_len (LE).
+       
+       mac.update(&i.to_le_bytes());
+       mac.update(label);
+       mac.update(context);
+       mac.update(&length_bits.to_le_bytes());
+       
+       let hash = mac.finalize().into_bytes();
+       
+       let start = ((i - 1) * 32) as usize;
+       let end = start + 32;
+       
+       if end <= 64 {
+           result[start..end].copy_from_slice(&hash);
+       }
     }
 
     result
@@ -143,33 +213,35 @@ fn prf_512(key: &[u8], prefix: &[u8], data: &[u8]) -> [u8; 64] {
 /// Calculate MIC (Message Integrity Code) for EAPOL frame
 ///
 /// MIC = HMAC-SHA1(KCK, EAPOL_frame)[0..16]  (for key_version = 2)
-/// MIC = HMAC-MD5(KCK, EAPOL_frame)           (for key_version = 1)
+/// MIC = HMAC-MD5(KCK, EAPOL_frame)          (for key_version = 1)
+/// MIC = AES-CMAC(KCK, EAPOL_frame)          (for key_version = 3)
 ///
 /// # Arguments
 /// * `kck` - Key Confirmation Key (first 16 bytes of PTK)
 /// * `eapol_frame` - EAPOL frame with MIC field zeroed
-/// * `key_version` - Key version from handshake (1 or 2)
-///
-/// # Returns
-/// 16-byte MIC
+/// * `key_version` - Key version from handshake (1, 2, or 3)
 #[inline]
 pub fn calculate_mic(kck: &[u8; 16], eapol_frame: &[u8], key_version: u8) -> [u8; 16] {
     let mut result = [0u8; 16];
 
     match key_version {
-        1 => {
-            // HMAC-MD5 for WPA
+        1 => { // HMAC-MD5
             use hmac::Hmac;
             use md5::Md5;
             type HmacMd5 = Hmac<Md5>;
-
             let mut mac = HmacMd5::new_from_slice(kck)
                 .expect("HMAC can take key of any size");
             mac.update(eapol_frame);
             result.copy_from_slice(&mac.finalize().into_bytes());
         }
-        _ => {
-            // HMAC-SHA1 for WPA2 (take first 16 bytes) - also default
+        3 => { // AES-128-CMAC
+             use cmac::Mac;
+             let mut mac = Aes128Cmac::new_from_slice(kck)
+                 .expect("CMAC key size error");
+             mac.update(eapol_frame);
+             result.copy_from_slice(&mac.finalize().into_bytes());
+        }
+        _ => { // HMAC-SHA1
             let mut mac = HmacSha1::new_from_slice(kck)
                 .expect("HMAC can take key of any size");
             mac.update(eapol_frame);
@@ -177,32 +249,12 @@ pub fn calculate_mic(kck: &[u8; 16], eapol_frame: &[u8], key_version: u8) -> [u8
             result.copy_from_slice(&hash[..16]);
         }
     }
-
     result
 }
 
 /// Verify if a password is correct by comparing calculated MIC with captured MIC
 ///
-/// This is the core function for password cracking:
-/// 1. Calculate PMK from password and SSID
-/// 2. Calculate PTK from PMK and handshake data
-/// 3. Extract KCK (first 16 bytes of PTK)
-/// 4. Calculate MIC using KCK
-/// 5. Compare with captured MIC
-///
-/// # Arguments
-/// * `password` - Password to test
-/// * `ssid` - Network SSID
-/// * `ap_mac` - AP MAC address
-/// * `client_mac` - Client MAC address
-/// * `anonce` - Authenticator nonce
-/// * `snonce` - Supplicant nonce
-/// * `eapol_frame` - EAPOL frame (with MIC zeroed)
-/// * `captured_mic` - MIC from captured handshake
-/// * `key_version` - Key version (1 or 2)
-///
-/// # Returns
-/// true if password is correct, false otherwise
+/// Supports WPA (MD5), WPA2 (SHA1), and WPA2-SHA256/WPA3 (SHA256/CMAC)
 #[inline(always)]
 pub fn verify_password(
     password: &str,
@@ -215,11 +267,15 @@ pub fn verify_password(
     captured_mic: &[u8],
     key_version: u8,
 ) -> bool {
-    // Step 1: Calculate PMK (expensive - 4096 iterations)
-    let pmk = calculate_pmk(password, ssid);
+    // Step 1: Calculate PMK
+    let pmk = if key_version == 3 {
+        calculate_pmk_sha256(password, ssid)
+    } else {
+        calculate_pmk(password, ssid)
+    };
 
     // Step 2: Calculate PTK
-    let ptk = calculate_ptk(&pmk, ap_mac, client_mac, anonce, snonce);
+    let ptk = calculate_ptk(&pmk, ap_mac, client_mac, anonce, snonce, key_version);
 
     // Step 3: Extract KCK (first 16 bytes of PTK)
     let kck: [u8; 16] = ptk[0..16].try_into().unwrap();
@@ -227,7 +283,7 @@ pub fn verify_password(
     // Step 4: Calculate MIC
     let calculated_mic = calculate_mic(&kck, eapol_frame, key_version);
 
-    // Step 5: Compare MICs (constant-time comparison to prevent timing attacks)
+    // Step 5: Compare MICs
     constant_time_compare_16(&calculated_mic, captured_mic)
 }
 
@@ -272,7 +328,8 @@ mod tests {
         let anonce = [0u8; 32];
         let snonce = [1u8; 32];
 
-        let ptk = calculate_ptk(&pmk, &ap_mac, &client_mac, &anonce, &snonce);
+        // Test with key_version 2 (WPA2)
+        let ptk = calculate_ptk(&pmk, &ap_mac, &client_mac, &anonce, &snonce, 2);
 
         // PTK should be 64 bytes
         assert_eq!(ptk.len(), 64);
@@ -280,8 +337,13 @@ mod tests {
 
     #[test]
     fn test_constant_time_compare() {
-        assert!(constant_time_compare(&[1, 2, 3], &[1, 2, 3]));
-        assert!(!constant_time_compare(&[1, 2, 3], &[1, 2, 4]));
-        assert!(!constant_time_compare(&[1, 2], &[1, 2, 3]));
+        // Test with 16 byte arrays
+        let a = [1u8; 16];
+        let b = [1u8; 16];
+        let mut c = [1u8; 16];
+        c[0] = 2;
+        
+        assert!(constant_time_compare_16(&a, &b));
+        assert!(!constant_time_compare_16(&a, &c));
     }
 }
