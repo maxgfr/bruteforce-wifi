@@ -18,3 +18,20 @@ Thumbs.db
 # Build
 /dist/
 /build/
+*.dmg
+*.app
+dmg_temp/
+*.msi
+*.zip
+*.sha256
+
+# Capture files
+*.cap
+*.pcap
+
+# Wordlists
+rockyou.txt
+*.lst
+
+# Claude
+.claude/

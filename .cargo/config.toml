@@ -13,10 +13,14 @@ rustflags = [
 rustflags = [
     # Use Apple M1 as baseline instead of native to avoid x86 features during cross-compilation
     "-C", "target-cpu=apple-m1",
+    # Enable ARM crypto extensions for AES/SHA acceleration
+    "-C", "target-feature=+neon,+crypto,+aes,+sha2",
 ]
 
 # x86_64 optimizations (Intel Macs)
 [target.x86_64-apple-darwin]
 rustflags = [
     "-C", "target-cpu=native",
+    # Enable Intel AES-NI and SHA extensions
+    "-C", "target-feature=+aes,+sse2,+sse3,+sse4.1,+sse4.2,+avx,+avx2,+sha",
 ]

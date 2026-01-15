@@ -5,9 +5,8 @@
  * The handshake contains all the information needed to bruteforce the password offline.
  */
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
-use colored::*;
 
 /// WPA/WPA2 4-way handshake data structure
 ///
@@ -47,25 +46,10 @@ pub struct Handshake {
 impl Handshake {
     /// Load handshake from file
     pub fn load_from_file(path: &std::path::Path) -> Result<Self> {
-        let json = std::fs::read_to_string(path)
-            .context("Failed to read handshake file")?;
-        let handshake: Handshake = serde_json::from_str(&json)
-            .context("Failed to parse handshake file")?;
+        let json = std::fs::read_to_string(path).context("Failed to read handshake file")?;
+        let handshake: Handshake =
+            serde_json::from_str(&json).context("Failed to parse handshake file")?;
         Ok(handshake)
-    }
-
-    /// Display handshake information
-    pub fn display(&self) {
-        println!("WPA/WPA2 Handshake Information:");
-        println!("  SSID: {}", self.ssid);
-        println!("  AP MAC: {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
-            self.ap_mac[0], self.ap_mac[1], self.ap_mac[2],
-            self.ap_mac[3], self.ap_mac[4], self.ap_mac[5]);
-        println!("  Client MAC: {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
-            self.client_mac[0], self.client_mac[1], self.client_mac[2],
-            self.client_mac[3], self.client_mac[4], self.client_mac[5]);
-        println!("  Key Version: {}", self.key_version);
-        println!("  MIC Length: {} bytes", self.mic.len());
     }
 }
 
@@ -76,11 +60,12 @@ impl Handshake {
 pub fn parse_cap_file(path: &std::path::Path, ssid: Option<&str>) -> Result<Handshake> {
     // Use pcap crate directly instead of pcap_parser to ensure compatibility
     // with how we write the file (using libpcap via pcap crate)
-    let mut cap = pcap::Capture::from_file(path)
-        .map_err(|e| anyhow!("Failed to open pcap file: {:?}", e))?;
+    let mut cap =
+        pcap::Capture::from_file(path).map_err(|e| anyhow!("Failed to open pcap file: {:?}", e))?;
 
     let mut eapol_packets: Vec<EapolPacket> = Vec::new();
-    let mut bssid_ssid_map: std::collections::HashMap<[u8; 6], String> = std::collections::HashMap::new();
+    let mut bssid_ssid_map: std::collections::HashMap<[u8; 6], String> =
+        std::collections::HashMap::new();
 
     // Read all packets
     while let Ok(packet) = cap.next_packet() {
@@ -88,7 +73,7 @@ pub fn parse_cap_file(path: &std::path::Path, ssid: Option<&str>) -> Result<Hand
         if let Some(eapol) = extract_eapol_from_packet(packet.data) {
             eapol_packets.push(eapol);
         }
-        
+
         // Try to extract SSID and BSSID from Beacon
         if let Some((bssid, extracted_ssid)) = extract_bssid_ssid_from_beacon(packet.data) {
             bssid_ssid_map.insert(bssid, extracted_ssid);
@@ -105,41 +90,54 @@ pub fn parse_cap_file(path: &std::path::Path, ssid: Option<&str>) -> Result<Hand
 
 /// Extract BSSID and SSID from Beacon frame
 fn extract_bssid_ssid_from_beacon(data: &[u8]) -> Option<([u8; 6], String)> {
-   // Skip radiotap
-   if data.len() < 50 { return None; }
+    // Skip radiotap
+    if data.len() < 50 {
+        return None;
+    }
     let radiotap_len = u16::from_le_bytes([data[2], data[3]]) as usize;
-    if data.len() < radiotap_len + 24 { return None; }
-    
+    if data.len() < radiotap_len + 24 {
+        return None;
+    }
+
     let frame = &data[radiotap_len..];
-    
+
     // Frame Control: Check for Management frames (Type 0)
     // Beacon = Type 0, Subtype 8 (0x80)
     // Probe Response = Type 0, Subtype 5 (0x50)
     let fc = frame[0];
     let f_type = (fc >> 2) & 0x3;
     let f_subtype = (fc >> 4) & 0xF;
-    
+
     // Must be management frame (type 0)
-    if f_type != 0 { return None; }
-    
+    if f_type != 0 {
+        return None;
+    }
+
     // Must be Beacon (subtype 8) or Probe Response (subtype 5)
-    if f_subtype != 8 && f_subtype != 5 { return None; }
-    
+    if f_subtype != 8 && f_subtype != 5 {
+        return None;
+    }
+
     // BSSID is Addr3 (offset 16)
     let bssid: [u8; 6] = frame[16..22].try_into().ok()?;
 
     // Body starts at 24 (Header) + 12 (Fixed Params) = 36
     let mut i = 36;
     while i < frame.len() {
-        if i + 2 > frame.len() { break; }
+        if i + 2 > frame.len() {
+            break;
+        }
         let id = frame[i];
-        let len = frame[i+1] as usize;
+        let len = frame[i + 1] as usize;
         let val_start = i + 2;
         let val_end = val_start + len;
-        
-        if val_end > frame.len() { break; }
-        
-        if id == 0 { // SSID
+
+        if val_end > frame.len() {
+            break;
+        }
+
+        if id == 0 {
+            // SSID
             if let Ok(s) = std::str::from_utf8(&frame[val_start..val_end]) {
                 return Some((bssid, s.to_string()));
             }
@@ -192,7 +190,7 @@ pub fn extract_eapol_from_packet(data: &[u8]) -> Option<EapolPacket> {
     }
 
     // Extract ToDS and FromDS flags from frame control
-    let to_ds = (frame_control & 0x0100) != 0;   // Bit 8
+    let to_ds = (frame_control & 0x0100) != 0; // Bit 8
     let from_ds = (frame_control & 0x0200) != 0; // Bit 9
 
     // Extract MAC addresses from 802.11 header
@@ -205,9 +203,9 @@ pub fn extract_eapol_from_packet(data: &[u8]) -> Option<EapolPacket> {
     // - FromDS=1, ToDS=0 (AP → STA/M1,M3): Addr1=Client, Addr2=BSSID(AP), Addr3=SA(AP)
     // - FromDS=0, ToDS=1 (STA → AP/M2,M4): Addr1=BSSID(AP), Addr2=Client, Addr3=DA(AP)
     let (ap_mac, client_mac) = match (to_ds, from_ds) {
-        (false, true) => (addr2, addr1),  // AP → Client (M1, M3)
-        (true, false) => (addr1, addr2),  // Client → AP (M2, M4)
-        _ => return None, // Other combinations not expected for EAPOL
+        (false, true) => (addr2, addr1), // AP → Client (M1, M3)
+        (true, false) => (addr1, addr2), // Client → AP (M2, M4)
+        _ => return None,                // Other combinations not expected for EAPOL
     };
 
     // Skip to LLC/SNAP header (after 802.11 header + QoS if present)
@@ -236,9 +234,9 @@ pub fn extract_eapol_from_packet(data: &[u8]) -> Option<EapolPacket> {
     let total_len = 4 + body_len;
 
     if eapol_data.len() < total_len {
-        return None; 
+        return None;
     }
-    
+
     // Truncate to exact EAPOL length
     let eapol_data = &eapol_data[..total_len];
 
@@ -265,7 +263,7 @@ pub fn extract_eapol_from_packet(data: &[u8]) -> Option<EapolPacket> {
     // but relying on just flags can be tricky.
     // M2 usually has Secure=0, M4 has Secure=1.
     // However, for cracking we need SNonce. M2 MUST have SNonce.
-    
+
     // Simplification for our purpose:
     // M1: Ack=1, Mic=0
     // M2: Ack=0, Mic=1 (Context: Client->AP)
@@ -277,16 +275,20 @@ pub fn extract_eapol_from_packet(data: &[u8]) -> Option<EapolPacket> {
         (false, true, false) => {
             // Distinguishing M2 from M4 is hard with just flags.
             // We'll verify later if it has SNonce (required for M2).
-            // For now, let's look at the data length or other fields if needed, 
+            // For now, let's look at the data length or other fields if needed,
             // but we can mark it as M2 (candidate) or check Secure bit if we parsed it.
             // Let's assume it's M2 if we see these flags, extract logic handles content.
             // But to avoid the unreachable pattern warning, we remove M4 line or distinguish.
-            
+
             // If we assume M2/M4 have same flags, they map to '2' here (or we check secure bit).
             let secure_flag = (key_info & 0x200) != 0;
-            if secure_flag { 4 } else { 2 }
-        },
-        (true, true, true) => 3,    // M3: ANonce from AP (retransmit)
+            if secure_flag {
+                4
+            } else {
+                2
+            }
+        }
+        (true, true, true) => 3, // M3: ANonce from AP (retransmit)
         // (false, true, false) => 4,  // Removed as it overlaps with M2 case above
         _ => return None,
     };
@@ -332,10 +334,12 @@ pub fn extract_eapol_from_packet(data: &[u8]) -> Option<EapolPacket> {
 fn build_handshake_from_eapol(
     packets: &[EapolPacket],
     ssid: Option<&str>,
-    bssid_map: &std::collections::HashMap<[u8; 6], String>
+    bssid_map: &std::collections::HashMap<[u8; 6], String>,
 ) -> Result<Handshake> {
     // Collect all potential M2 candidates along with their indices
-    let m2_candidates: Vec<(usize, &EapolPacket)> = packets.iter().enumerate()
+    let m2_candidates: Vec<(usize, &EapolPacket)> = packets
+        .iter()
+        .enumerate()
         .filter(|(_, p)| p.message_type == 2 && p.snonce.is_some() && p.mic.is_some())
         .collect();
 
@@ -348,14 +352,15 @@ fn build_handshake_from_eapol(
         // Find the last M1 (ANonce) that appears BEFORE this M2.
         // This handles retransmissions: M1(A) -> M1(B) -> M2(resp B).
         // We want M1(B), which is the latest one before M2 (and matches Replay Counter).
-        let m1_opt = packets[0..m2_index].iter().rev()
-            .find(|p| p.message_type == 1 && p.anonce.is_some() 
+        let m1_opt = packets[0..m2_index].iter().rev().find(|p| {
+            p.message_type == 1 && p.anonce.is_some()
                  && p.ap_mac == m2.ap_mac       // Ensure it's the same session
                  && p.client_mac == m2.client_mac
-                 && p.replay_counter == m2.replay_counter); // CRITICAL: Match replay counter
+                 && p.replay_counter == m2.replay_counter
+        }); // CRITICAL: Match replay counter
 
         if let Some(m1) = m1_opt {
-             // Found a valid pair!
+            // Found a valid pair!
             let ap_mac = m1.ap_mac;
             let client_mac = m2.client_mac;
             let anonce = m1.anonce.unwrap();
@@ -377,21 +382,21 @@ fn build_handshake_from_eapol(
             // 1. SSID provided by user (forces override)
             // 2. SSID found in beacon matching BSSID
             // 3. Error
-            
+
             let ssid_str = if let Some(s) = ssid {
                 // Check if it matches detected (just for warning)
                 if let Some(detected) = bssid_map.get(&ap_mac) {
                     if s != detected {
-                        println!("{}", format!("\n⚠️  WARNING: Provided SSID '{}' does not match the SSID '{}' broadcasted by the target AP ({:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X})", 
-                            s, detected, ap_mac[0], ap_mac[1], ap_mac[2], ap_mac[3], ap_mac[4], ap_mac[5]).yellow().bold());
-                         println!("{}", "   Using provided SSID. If cracking fails, rely on the detected SSID.\n".yellow());
+                        println!("\n⚠️  WARNING: Provided SSID '{}' does not match the SSID '{}' broadcasted by the target AP ({:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X})",
+                            s, detected, ap_mac[0], ap_mac[1], ap_mac[2], ap_mac[3], ap_mac[4], ap_mac[5]);
+                        println!("   Using provided SSID. If cracking fails, rely on the detected SSID.\n");
                     }
                 }
                 s.to_string()
             } else {
-                 match bssid_map.get(&ap_mac) {
+                match bssid_map.get(&ap_mac) {
                     Some(s) => {
-                        println!("{}", format!("✨ Auto-detected SSID for target AP: {}", s).green());
+                        println!("✨ Auto-detected SSID for target AP: {}", s);
                         s.clone()
                     },
                     None => return Err(anyhow!("SSID not found for target AP ({:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}). Please provide --ssid.",
@@ -415,4 +420,3 @@ fn build_handshake_from_eapol(
     // If we reach here, we found M2(s) but no matching M1s
     Err(anyhow!("Found valid Message 2 packets, but could not find any corresponding Message 1 (Replay Counter mismatch)"))
 }
-

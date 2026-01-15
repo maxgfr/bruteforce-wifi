@@ -11,12 +11,12 @@
  * - RFC 2898 (PBKDF2)
  */
 
+use aes::Aes128;
+use cmac::Cmac;
 use hmac::{Hmac, Mac};
 use pbkdf2::pbkdf2;
 use sha1::Sha1;
 use sha2::Sha256;
-use aes::Aes128;
-use cmac::Cmac;
 
 type HmacSha1 = Hmac<Sha1>;
 type HmacSha256 = Hmac<Sha256>;
@@ -41,12 +41,7 @@ const PRF_LABEL: &[u8] = b"Pairwise key expansion";
 #[inline]
 pub fn calculate_pmk(passphrase: &str, ssid: &str) -> [u8; 32] {
     let mut pmk = [0u8; 32];
-    let _ = pbkdf2::<HmacSha1>(
-        passphrase.as_bytes(),
-        ssid.as_bytes(),
-        4096,
-        &mut pmk,
-    );
+    let _ = pbkdf2::<HmacSha1>(passphrase.as_bytes(), ssid.as_bytes(), 4096, &mut pmk);
     pmk
 }
 
@@ -54,12 +49,7 @@ pub fn calculate_pmk(passphrase: &str, ssid: &str) -> [u8; 32] {
 #[inline]
 pub fn calculate_pmk_sha256(passphrase: &str, ssid: &str) -> [u8; 32] {
     let mut pmk = [0u8; 32];
-    let _ = pbkdf2::<HmacSha256>(
-        passphrase.as_bytes(),
-        ssid.as_bytes(),
-        4096,
-        &mut pmk,
-    );
+    let _ = pbkdf2::<HmacSha256>(passphrase.as_bytes(), ssid.as_bytes(), 4096, &mut pmk);
     pmk
 }
 
@@ -141,8 +131,7 @@ fn prf_512(key: &[u8], prefix: &[u8], data: &[u8]) -> [u8; 64] {
 
     for i in 0..4u8 {
         input[counter_pos] = i;
-        let mut mac = HmacSha1::new_from_slice(key)
-            .expect("HMAC can take key of any size");
+        let mut mac = HmacSha1::new_from_slice(key).expect("HMAC can take key of any size");
         mac.update(&input[..input_len]);
         let hash = mac.finalize().into_bytes();
 
@@ -200,25 +189,25 @@ pub fn calculate_mic(kck: &[u8; 16], eapol_frame: &[u8], key_version: u8) -> [u8
     let mut result = [0u8; 16];
 
     match key_version {
-        1 => { // HMAC-MD5
+        1 => {
+            // HMAC-MD5
             use hmac::Hmac;
             use md5::Md5;
             type HmacMd5 = Hmac<Md5>;
-            let mut mac = HmacMd5::new_from_slice(kck)
-                .expect("HMAC can take key of any size");
+            let mut mac = HmacMd5::new_from_slice(kck).expect("HMAC can take key of any size");
             mac.update(eapol_frame);
             result.copy_from_slice(&mac.finalize().into_bytes());
         }
-        3 => { // AES-128-CMAC
-             use cmac::Mac;
-             let mut mac = Aes128Cmac::new_from_slice(kck)
-                 .expect("CMAC key size error");
-             mac.update(eapol_frame);
-             result.copy_from_slice(&mac.finalize().into_bytes());
+        3 => {
+            // AES-128-CMAC
+            use cmac::Mac;
+            let mut mac = Aes128Cmac::new_from_slice(kck).expect("CMAC key size error");
+            mac.update(eapol_frame);
+            result.copy_from_slice(&mac.finalize().into_bytes());
         }
-        _ => { // HMAC-SHA1
-            let mut mac = HmacSha1::new_from_slice(kck)
-                .expect("HMAC can take key of any size");
+        _ => {
+            // HMAC-SHA1
+            let mut mac = HmacSha1::new_from_slice(kck).expect("HMAC can take key of any size");
             mac.update(eapol_frame);
             let hash = mac.finalize().into_bytes();
             result.copy_from_slice(&hash[..16]);
@@ -317,7 +306,7 @@ mod tests {
         let b = [1u8; 16];
         let mut c = [1u8; 16];
         c[0] = 2;
-        
+
         assert!(constant_time_compare_16(&a, &b));
         assert!(!constant_time_compare_16(&a, &c));
     }

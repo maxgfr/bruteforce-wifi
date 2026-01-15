@@ -7,24 +7,26 @@ license = "MIT"
 repository = "https://github.com/maxgfr/bruteforce-wifi"
 authors = ["maxgfr"]
 
+[[bin]]
+name = "bruteforce-wifi"
+path = "src/main.rs"
+
 [dependencies]
-clap = { version = "4.5", features = ["derive"] }
 tokio = { version = "1.35", features = ["full"] }
 anyhow = "1.0"
 rayon = "1.8"
-indicatif = "0.17"
-colored = "2.1"
 num_cpus = "1.16"
 parking_lot = "0.12"
 regex = "1.10"
 
 # Cryptography for WPA/WPA2 handshake cracking
-pbkdf2 = { version = "0.12", default-features = false, features = ["simple"] }
+# Enable parallel features for SIMD optimizations
+pbkdf2 = { version = "0.12", default-features = false, features = ["simple", "parallel"] }
 hmac = "0.12"
-sha1 = "0.10"
-sha2 = "0.10"
-md-5 = "0.10"
-aes = "0.8"
+sha1 = { version = "0.10", features = ["asm"] }
+sha2 = { version = "0.10", features = ["asm"] }
+md-5 = { version = "0.10", features = ["asm"] }
+aes = { version = "0.8", features = ["hazmat"] }
 cmac = "0.7"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -35,6 +37,10 @@ pcap = "2.4.0"
 
 # System calls for macOS
 libc = "0.2"
+
+# GUI dependencies (Iced)
+iced = { version = "0.13", features = ["tokio", "advanced"] }
+rfd = "0.15"
 
 [profile.release]
 opt-level = 3

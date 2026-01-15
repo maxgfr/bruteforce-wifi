@@ -26,10 +26,11 @@ impl ParallelPasswordGenerator {
         let end = 10u64.pow(length as u32); // Full range: 10^length
 
         // Optimal batch size: balance between parallelism and overhead
-        // Cap at 1000 to ensure UI responsiveness (updates every ~0.5s at 2000 pwd/s)
-        let batch_size = 1000.min((end - start) as usize / threads);
+        // Larger batches reduce overhead and improve cache locality
+        // For maximum performance, use 10000-50000 passwords per batch
+        let batch_size = 50000.min((end - start) as usize / threads);
         // Ensure at least some batch size
-        let batch_size = batch_size.max(100);
+        let batch_size = batch_size.max(1000);
 
         Self {
             start,
@@ -47,14 +48,38 @@ impl ParallelPasswordGenerator {
     /// Generate passwords in batches
     ///
     /// Returns an iterator of password batches that can be processed in parallel.
+    /// Optimized for minimal allocations and maximum throughput.
     pub fn batches(&self) -> impl Iterator<Item = Vec<String>> + '_ {
         (self.start..self.end)
             .step_by(self.batch_size)
             .map(move |batch_start| {
                 let batch_end = (batch_start + self.batch_size as u64).min(self.end);
-                (batch_start..batch_end)
-                    .map(|num| format!("{:0width$}", num, width = self.length))
-                    .collect()
+                let batch_capacity = (batch_end - batch_start) as usize;
+                let mut batch = Vec::with_capacity(batch_capacity);
+
+                for num in batch_start..batch_end {
+                    // Pre-allocate string with exact capacity
+                    let mut s = String::with_capacity(self.length);
+                    let mut n = num;
+                    let mut buf = [0u8; 20]; // Max digits for u64 is 20
+                    let mut pos = self.length;
+
+                    // Build string from right to left
+                    while pos > 0 {
+                        pos -= 1;
+                        buf[pos] = (n % 10) as u8 + b'0';
+                        n /= 10;
+                    }
+
+                    // Convert to UTF-8 string (safe since we only used digits)
+                    unsafe {
+                        s.as_mut_vec().extend_from_slice(&buf[..self.length]);
+                    }
+
+                    batch.push(s);
+                }
+
+                batch
             })
     }
 }

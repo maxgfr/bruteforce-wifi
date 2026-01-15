@@ -1,90 +1,58 @@
-mod cli;
-mod bruteforce;
-mod password_gen;
-mod handshake;
-mod crypto;
-mod network;
+/*!
+ * WiFi Bruteforce Desktop GUI Application
+ *
+ * Built with Iced framework for macOS/Linux/Windows support.
+ * Provides a user-friendly interface for:
+ * - Scanning WiFi networks
+ * - Capturing WPA/WPA2 handshakes
+ * - Cracking passwords (numeric or wordlist)
+ */
 
-use anyhow::Result;
-use clap::Parser;
-use colored::Colorize;
+mod app;
+mod screens;
+mod theme;
+mod workers;
 
-use cli::{Args, Mode, CrackMethod};
-use bruteforce::{BruteforceConfig, bruteforce_wordlist, bruteforce_numeric};
-use network::{capture_traffic, scan_networks, display_networks};
+use app::BruteforceApp;
+use iced::Size;
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let args = Args::parse();
-
-    println!("\n{}", "📡 Bruteforce WiFi v2.0.0".bold().cyan());
-    println!("{}\n", "WPA/WPA2 offline cracking tool - Educational use only".dimmed());
-
-    match args.mode {
-        Mode::Scan(scan_args) => {
-            let networks = scan_networks(&scan_args.interface)?;
-            display_networks(&networks);
-        }
-        Mode::Capture(capture_args) => {
-            capture_traffic(
-                &capture_args.interface,
-                capture_args.channel,
-                capture_args.ssid.as_deref(),
-                capture_args.bssid.as_deref(),
-                &capture_args.output,
-                capture_args.duration,
-                capture_args.verbose,
-                capture_args.no_deauth,
-            )?;
-        }
-        Mode::Crack { method } => {
-            let config = BruteforceConfig {
-                threads: args.threads.unwrap_or_else(num_cpus::get),
-            };
-            handle_crack_mode(method, &config).await?;
-        }
-    }
-
-    Ok(())
+/// Check if the application is running with root privileges
+#[cfg(unix)]
+fn is_root() -> bool {
+    unsafe { libc::geteuid() == 0 }
 }
 
-/// Handle crack mode - offline bruteforce against handshake
-async fn handle_crack_mode(method: CrackMethod, config: &BruteforceConfig) -> Result<()> {
-    let result = match method {
-        CrackMethod::Wordlist { handshake, ssid, wordlist } => {
-            println!("{}", "\n🔓 Starting wordlist attack...".cyan());
-            bruteforce_wordlist(config, &handshake, ssid.as_deref(), &wordlist).await?
-        }
-        CrackMethod::Numeric { handshake, ssid, min, max } => {
-            println!("{}", "\n🔢 Starting numeric combination attack...".cyan());
-            bruteforce_numeric(config, &handshake, ssid.as_deref(), min, max).await?
-        }
-    };
+#[cfg(not(unix))]
+fn is_root() -> bool {
+    false
+}
 
-    // Display results
-    println!();
-    match result.password {
-        Some(password) => {
-            println!("{} {}", "✓ Password found:".bold().green(), password.bold().cyan());
-            println!("{}", "  Save this password securely!".yellow());
-            println!("\n{}", "Statistics:".bold());
-            println!("  Attempts: {}", result.attempts.to_string().cyan());
-            println!("  Duration: {:.2}s", result.duration_secs);
-            println!("  Speed: {:.0} passwords/second", result.passwords_per_second.to_string().green());
-        }
-        None => {
-            println!("{}", "✗ Password not found in the provided range/wordlist".red());
-            println!("\n{}", "Statistics:".bold());
-            println!("  Attempts: {}", result.attempts.to_string().cyan());
-            println!("  Duration: {:.2}s", result.duration_secs);
-            println!("  Speed: {:.0} passwords/second", result.passwords_per_second);
+fn main() -> iced::Result {
+    // Check for root privileges
+    let is_root = is_root();
 
-            println!("\n{}", "💡 Tips:".bold().yellow());
-            println!("  - Try a larger wordlist (e.g., rockyou.txt)");
-            println!("  - Check if the password uses special characters");
-            println!("  - Verify the handshake file is valid");
-        }
+    if !is_root {
+        eprintln!("\n⚠️  WARNING: Not running as root!");
+        eprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        eprintln!("Some features require root privileges:");
+        eprintln!("  • Network scanning (macOS)");
+        eprintln!("  • Packet capture");
+        eprintln!("");
+        eprintln!("To run with root privileges:");
+        eprintln!("  sudo ./target/release/bruteforce-wifi");
+        eprintln!("");
+        eprintln!("Or build and run:");
+        eprintln!("  cargo build --release && sudo ./target/release/bruteforce-wifi");
+        eprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
     }
 
-    Ok(())
+    iced::application(
+        "WiFi Bruteforce Tool",
+        BruteforceApp::update,
+        BruteforceApp::view,
+    )
+    .subscription(BruteforceApp::subscription)
+    .theme(BruteforceApp::theme)
+    .window_size(Size::new(900.0, 700.0))
+    .run_with(move || BruteforceApp::new(is_root))
 }

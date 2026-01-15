@@ -1,451 +1,260 @@
-# 📡 Bruteforce WiFi
+# WiFi Bruteforce Tool 🔐
 
-<div align="center">
+> Modern desktop application for WPA/WPA2 security testing with real-time feedback
+
+[![Release](https://github.com/maxgfr/bruteforce-wifi/actions/workflows/release.yml/badge.svg)](https://github.com/maxgfr/bruteforce-wifi/releases)
+[![CI](https://github.com/maxgfr/bruteforce-wifi/actions/workflows/ci.yml/badge.svg)](https://github.com/maxgfr/bruteforce-wifi/actions)
+[![Rust](https://img.shields.io/badge/Rust-1.70+-orange.svg)](https://www.rust-lang.org/)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 **⚠️ EDUCATIONAL USE ONLY - UNAUTHORIZED ACCESS IS ILLEGAL ⚠️**
 
-[![Rust](https://img.shields.io/badge/Rust-1.70+-orange.svg)](https://www.rust-lang.org/)
-[![Platform](https://img.shields.io/badge/Platform-macOS%20|%20Linux%20|%20Windows-lightgrey.svg)](#)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+A high-performance, cross-platform desktop GUI application for testing WPA/WPA2 password security through offline bruteforce attacks.
 
-**All-in-One WiFi Security Tool: Capture & Crack**
+## ✨ Features
 
-**Performance:** 5,000-50,000 pwd/sec (offline handshake cracking) 🚀
+- 🖥️ **Modern Desktop GUI** - Built with Iced framework for smooth UX
+- 🚀 **Blazing Fast** - 5,000-50,000 passwords/sec with Rayon parallelization
+- 📡 **WiFi Network Scanning** - Real-time discovery with BSSID/channel detection
+- 🎯 **Handshake Capture** - EAPOL frame analysis with visual progress
+- 🔑 **Dual Attack Modes**:
+  - 🔢 Numeric bruteforce (PIN codes: 8-12 digits)
+  - 📋 Wordlist attacks (rockyou.txt, custom lists)
+- 📊 **Live Progress** - Real-time speed metrics and ETA
+- 🍎 **macOS Native** - Automatic Location Services integration  
+- 🪟 **Windows Ready** - Full WinPcap support
+- 🔒 **100% Offline** - No data transmitted anywhere
 
-</div>
+## 📦 Installation
 
----
+### macOS
 
-## 📚 Table of Contents
-
-- [Quick Start](#-quick-start)
-- [How It Works](#-how-it-works)
-- [Complete Workflow](#-complete-workflow-example)
-- [Features](#-features)
-- [Performance](#-performance-benchmarks)
-- [Installation](#-installation)
-- [Usage](#-usage)
-- [Building from Source](#-building-from-source)
-- [Security & Legal](#-security--legal)
-
----
-
-## ⚡ Quick Start
-
-### Step 1: Capture Handshake
+Download the latest DMG from [Releases](https://github.com/maxgfr/bruteforce-wifi/releases):
 
 ```bash
-# Auto-detect channel and capture by SSID
-bruteforce-wifi capture --interface en0 --ssid "TP-Link_5GHz"
+# Apple Silicon (M1/M2/M3/M4) - Recommended
+curl -LO https://github.com/maxgfr/bruteforce-wifi/releases/latest/download/WiFi-Bruteforce-macOS-arm64.dmg
 
-# OR capture by BSSID (if SSID is hidden or duplicate)
-bruteforce-wifi capture --interface en0 --bssid AA:BB:CC:DD:EE:FF
+# Intel x86_64
+curl -LO https://github.com/maxgfr/bruteforce-wifi/releases/latest/download/WiFi-Bruteforce-macOS-x86_64.dmg
 ```
 
-**Real-time feedback:**
-- 🔑 M1 (ANonce) - AP sends nonce to client
-- 🔐 M2 (SNonce+MIC) - Client responds with nonce + MIC
-- 🎉 **COMPLETE HANDSHAKE** - Ready to crack!
+**Setup Location Services** (required for BSSID access):
+1. Open the DMG and drag to Applications
+2. Launch the app - macOS will prompt for Location Services permission
+3. Click "Allow" to enable WiFi BSSID scanning
 
-*Tip: Disconnect and reconnect a device manually if deauth doesn't work (macOS)*
+> **Tip**: If the prompt doesn't appear, manually enable in:  
+> `System Settings → Privacy & Security → Location Services → WiFi Bruteforce`
 
+### Windows
 
-### Step 2: Crack Offline
+Download the ZIP from [Releases](https://github.com/maxgfr/bruteforce-wifi/releases):
 
-```bash
-# Numeric attack (8 digits)
-bruteforce-wifi crack numeric capture.cap --ssid "TP-Link_5GHz" --min 8 --max 8
-
-# Wordlist attack
-bruteforce-wifi crack wordlist capture.cap --ssid "TP-Link_5GHz" rockyou.txt
+```powershell
+Invoke-WebRequest -Uri "https://github.com/maxgfr/bruteforce-wifi/releases/latest/download/WiFi-Bruteforce-Windows-x64.zip" -OutFile "WiFi-Bruteforce.zip"
+Expand-Archive WiFi-Bruteforce.zip
+cd WiFi-Bruteforce
+.\bruteforce-wifi.exe
 ```
 
----
+**Prerequisites**: Install [Npcap](https://npcap.com/) (modern alternative to WinPcap)
 
-## 🔬 How It Works
-
-### Traditional (Online) vs Offline Cracking
-
-| Method | Speed | Network Required | Detection Risk |
-|--------|-------|------------------|----------------|
-| **Online** (connect to WiFi) | 100-500 pwd/sec | ✅ Yes | 🔴 High |
-| **Offline** (handshake) | 5,000-50,000 pwd/sec | ❌ No | 🟢 None |
-
-### The WPA/WPA2 4-Way Handshake
-
-```
-Client                    Router (AP)
-  |                            |
-  |  1. ANonce                 |
-  |<---------------------------|
-  |  2. SNonce + MIC           |
-  |--------------------------->|
-  |  3. GTK + MIC              |
-  |<---------------------------|
-  |  4. ACK                    |
-  |--------------------------->|
-```
-
-We capture frames 1-4, which contain:
-- **SSID** - Network name (salt for PBKDF2)
-- **ANonce** - Authenticator nonce (from AP)
-- **SNonce** - Supplicant nonce (from client)
-- **MIC** - Message Integrity Code (to verify password)
-- **MAC addresses** - AP and client
-
-### Password Verification Algorithm
-
-```rust
-// 1. Calculate PMK (expensive: 4096 iterations)
-//    - WPA2: PBKDF2-HMAC-SHA1
-//    - WPA2-SHA256 / WPA3-Transition: PBKDF2-HMAC-SHA256
-PMK = PBKDF2(password, SSID, 4096, 256 bits)
-
-// 2. Calculate PTK
-//    - WPA2: PRF-512 (SHA1)
-//    - WPA2-SHA256: KDF-SHA256
-PTK = PRF(PMK, "Pairwise key expansion",
-          AA || SPA || ANonce || SNonce)
-
-// 3. Extract KCK (first 16 bytes of PTK)
-KCK = PTK[0..16]
-
-// 4. Calculate MIC
-//    - WPA: HMAC-MD5
-//    - WPA2: HMAC-SHA1
-//    - WPA2-SHA256 / WPA3-Transition: AES-128-CMAC
-calculated_MIC = MIC_ALGO(KCK, EAPOL_frame)
-
-// 5. Compare
-if calculated_MIC == captured_MIC:
-    password_found!
-```
-
----
-
-## 🎯 Complete Workflow Example
-
-### Scenario: Crack TP-Link Router with 8-Digit Password
-
-#### 1. Preparation
-
-Identify your target network's channel and BSSID using system tools (e.g., `airport -s` on macOS or `iwlist` on Linux).
-
-#### 2. Capture Traffic
-
-**Using bruteforce-wifi:**
-
-**Using bruteforce-wifi:**
-
-```bash
-# By SSID (Auto-channel)
-sudo bruteforce-wifi capture -i en0 -s "MyNetwork"
-
-# By BSSID (Target specific AP)
-sudo bruteforce-wifi capture -i en0 -b AA:BB:CC:DD:EE:FF
-```
-
-**Alternative (Linux/airodump-ng):**
-
-```bash
-# Start monitor mode
-sudo airmon-ng start wlan0
-# Capture on channel 6
-sudo airodump-ng -c 6 --bssid 14:CC:20:XX:XX:XX -w capture wlan0mon
-```
-
-In another terminal, you may need to force a reconnection (deauth) to capture the handshake quickly.
-
-#### 3. Crack the Password
-
-**Option 1: Numeric attack** (TP-Link typically uses 8 digits)
-
-```bash
-# Use .cap file directly with SSID
-bruteforce-wifi crack numeric capture-01.cap --ssid "TP-Link_5GHz" --min 8 --max 8 --threads 8
-```
-
-Output:
-```
-📡 Bruteforce WiFi v2.0.0
-WPA/WPA2 offline cracking tool - Educational use only
-
-🔢 Starting numeric combination attack...
-
-WPA/WPA2 Handshake Information:
-  SSID: TP-Link_5GHz
-  AP MAC: 14:CC:20:58:5A:5C
-  Client MAC: AA:BB:CC:DD:EE:FF
-  Key Version: 2
-  MIC Length: 16 bytes
-
-🚀 Starting offline WPA/WPA2 crack
-📝 SSID: TP-Link_5GHz
-🔢 Range: 8-8 digits
-🧵 Using 8 threads
-
-Testing 100000000 combinations (8 digits)...
-⠋ [00:03:45] [████████████████████░░░] 87234521/100000000 (23245 pwd/s) 23245 pwd/s
-
-✓ Password found: 87654321
-  Save this password securely!
-
-Statistics:
-  Attempts: 87,234,522
-  Duration: 3751.23s (1.04 hours)
-  Speed: 23,245 passwords/second
-```
-
-**Option 2: Wordlist attack**
-
-```bash
-# Download rockyou.txt wordlist
-wget https://github.com/brannondorsey/naive-hashcat/releases/download/data/rockyou.txt
-
-# Crack with wordlist
-bruteforce-wifi crack wordlist capture-01.cap --ssid "TP-Link_5GHz" rockyou.txt
-```
-
----
-
-## 🎯 Features
-
-### Offline Cracking Architecture
-
-- 🚀 **5,000-50,000 pwd/sec** - No network delays, pure CPU power
-- 🔒 **Capture once, crack anywhere** - Work completely offline
-- 🔐 **WPA/WPA2/WPA3 Support** - Supports WPA (MD5), WPA2 (SHA1), and WPA3-Transition/WPA2-SHA256 (AES-CMAC)
-- 🧵 **Multi-threaded** - Scales with CPU cores (optimal parallel processing)
-- 📊 **Real-time progress** - Live throughput stats and ETA
-- 💾 **Minimal memory** - ~15 MB footprint with zero-allocation crypto
-- 📦 **Direct .cap support** - No conversion needed, works with airodump-ng output
-
-### Two Attack Modes
-
-1. **Wordlist Attack** - Test passwords from a file
-   - Supports any text file (one password per line)
-   - Auto-filters invalid passwords (WPA: 8-63 chars)
-   - Parallel processing with rayon
-
-2. **Numeric Combination Attack** - Generate numeric passwords on-the-fly
-   - Range: 1-12 digits
-   - Optimized batch generation
-   - Perfect for routers with default numeric passwords (TP-Link, D-Link, etc.)
-
-### Cross-Platform Support
-
-- ✅ **macOS** (10.15+ Catalina)
-- ✅ **Linux** (any distro with NetworkManager)
-- ✅ **Windows** (10/11)
-
----
-
-## 📥 Installation
-
-### Option 1: From Binary (Releases)
-
-```bash
-# Download from GitHub Releases
-wget https://github.com/maxgfr/bruteforce-wifi/releases/latest/download/bruteforce-wifi-linux-x86_64.tar.gz
-
-# Extract
-tar xzf bruteforce-wifi-linux-x86_64.tar.gz
-
-# Install
-sudo mv bruteforce-wifi /usr/local/bin/
-```
-
-### Option 2: Homebrew (macOS/Linux)
-
-```bash
-brew tap maxgfr/tap
-brew install bruteforce-wifi
-```
-
-### Option 3: Cargo (From Source)
-
-```bash
-cargo install --git https://github.com/maxgfr/bruteforce-wifi
-```
-
----
-
-## 🎮 Usage
-
-### Capture Handshake
-
-```bash
-# Capture traffic
-sudo bruteforce-wifi capture --interface wlan0 --channel 6 --output capture.cap
-
-# For now, if automatic capture has issues, use airodump-ng manually.
-```
-
-This creates an example JSON file. Replace with your actual captured handshake.
-
-### Crack Handshake
-
-#### Wordlist Attack
-
-```bash
-bruteforce-wifi crack wordlist <HANDSHAKE_FILE> <WORDLIST_FILE>
-
-# Examples:
-bruteforce-wifi crack wordlist handshake.json rockyou.txt
-bruteforce-wifi crack wordlist handshake.json passwords.txt --threads 16
-```
-
-#### Numeric Attack
-
-```bash
-bruteforce-wifi crack numeric <HANDSHAKE_FILE> --min <MIN_DIGITS> --max <MAX_DIGITS>
-
-# Examples:
-bruteforce-wifi crack numeric handshake.json --min 8 --max 8
-bruteforce-wifi crack numeric handshake.json --min 4 --max 10 --threads 12
-```
-
-### Options
-
-```
---threads <N>    Number of threads (default: CPU count)
---verbose        Verbose output
---help           Show help message
-```
-
----
-
-## 🏗️ Building from Source
-
-### Prerequisites
-
-- **Rust 1.70+** (https://rustup.rs)
-
-### Build
+### From Source
 
 ```bash
 git clone https://github.com/maxgfr/bruteforce-wifi.git
 cd bruteforce-wifi
+cargo build --release
+./target/release/bruteforce-wifi
+```
 
-# Standard build
+## 🚀 Usage
+
+### Complete Workflow
+
+```
+1. Scan Networks → 2. Select Target → 3. Capture Handshake → 4. Crack Password
+```
+
+#### 1. **Scan for Networks**
+
+Launch the app and click "Scan Networks" to discover nearby WiFi networks with full details:
+- SSID (network name)
+- BSSID (MAC address)
+- Channel number
+- Signal strength
+- Security type (WPA/WPA2)
+
+#### 2. **Select & Capture**
+
+Select a network → Click "Continue to Capture" → "Start Capture"
+
+The app monitors for the WPA/WPA2 4-way handshake:
+- ✅ **M1** - ANonce (from AP)
+- ✅ **M2** - SNonce + MIC (from client)
+- 🎉 **Handshake Complete!**
+
+> **macOS Note**: Deauth attacks don't work on Apple Silicon. Manually reconnect a device to trigger the handshake (turn WiFi off/on on your phone).
+
+#### 3. **Crack Password**
+
+Navigate to "Crack" tab:
+- **Numeric Attack**: Tests PIN codes (e.g., 00000000-99999999)
+- **Wordlist Attack**: Tests passwords from files like rockyou.txt
+
+Real-time stats:
+- Progress bar with percentage
+- Current attempts / Total
+- Passwords per second
+- Live logs
+
+## 🛠️ Development
+
+### Prerequisites
+
+- **Rust 1.70+**: Install via [rustup](https://rustup.rs/)
+- **macOS**: Xcode Command Line Tools
+- **Linux**: `sudo apt install libpcap-dev libxkbcommon-dev libwayland-dev`
+- **Windows**: [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/) + WinPcap SDK
+
+### Build Commands
+
+```bash
+# Development build with fast compile times
+cargo build
+
+# Optimized release build
 cargo build --release
 
-# Ultra-optimized build (CPU-specific)
-RUSTFLAGS="-C target-cpu=native" cargo build --release
+# Run the app
+cargo run --release
 
-# Binary at: target/release/bruteforce-wifi
-```
+# Format code (enforced by CI)
+cargo fmt
 
-### Run Tests
+# Lint code (enforced by CI)
+cargo clippy --all-targets --all-features -- -D warnings
 
-```bash
-# Unit tests
+# Run tests
 cargo test
-
-# Create test handshake
-cargo run --example create_test_handshake
-
-# Test cracking (should find "12345678")
-cargo run --release -- crack numeric test_handshake.json --min 8 --max 8
 ```
 
----
+### Project Structure
 
-## 🔧 Advanced Usage
+```
+src/
+├── main.rs          # GUI entry point
+├── app.rs           # Application state & message handling
+├── theme.rs         # Color palette & styles
+├── workers.rs       # Background async tasks
+├── screens/         # UI screens (scan, capture, crack)
+│   ├── scan.rs
+│   ├── capture.rs
+│   └── crack.rs
+└── core/            # Core library
+    ├── bruteforce.rs  # Password cracking engine
+    ├── crypto.rs      # WPA/WPA2 crypto (PBKDF2, MIC)
+    ├── handshake.rs   # EAPOL parsing
+    ├── network.rs     # WiFi scanning & capture
+    └── password_gen.rs # Parallel password generation
+```
 
-### Generate Test Handshake
+## 📝 Contributing with Semantic Commits
 
+This project uses [Conventional Commits](https://www.conventionalcommits.org/) for automatic versioning:
+
+| Type | Description | Version Bump |
+|------|-------------|--------------|
+| `feat:` | New feature | Minor (1.x.0) |
+| `fix:` | Bug fix | Patch (1.0.x) |
+| `perf:` | Performance improvement | Patch |
+| `docs:` | Documentation | Patch |
+| `BREAKING CHANGE:` | Breaking API change | Major (x.0.0) |
+| `chore:`, `style:`, `refactor:`, `test:` | No release | - |
+
+**Examples:**
 ```bash
-cargo run --example create_test_handshake
-# Creates test_handshake.json with password "12345678"
+git commit -m "feat: add GPU acceleration for PBKDF2"
+git commit -m "fix: resolve memory leak in handshake parser"
+git commit -m "perf: optimize parallel password generation"
+git commit -m "docs: update README with Windows setup"
 ```
 
-### Custom Thread Count
+**Automatic Releases**: When you push semantic commits to `main`, GitHub Actions automatically:
+1. Determines version bump based on commit types
+2. Updates CHANGELOG.md
+3. Creates a GitHub release
+4. Builds & uploads macOS DMG + Windows ZIP binaries
 
-```bash
-# Use specific number of threads
-bruteforce-wifi crack numeric handshake.json --min 8 --max 8 --threads 16
+## 🏗️ CI/CD Pipeline
 
-# Use all cores (default)
-bruteforce-wifi crack numeric handshake.json --min 8 --max 8
-```
+### Continuous Integration (`.github/workflows/ci.yml`)
 
----
+Runs on every push/PR:
+- ✅ `cargo fmt` - Code formatting check
+- ✅ `cargo clippy` - Lint warnings
+- ✅ `cargo test` - Unit tests
+- ✅ Multi-platform builds (Ubuntu, macOS, Windows)
 
-## 🛡️ Security & Legal
+### Release Automation (`.github/workflows/release.yml`)
 
-<div align="center">
+Triggers on push to `main` with semantic commits:
+1. **Semantic Analysis** - Determines next version
+2. **macOS Build**:
+   - Apple Silicon (arm64) - Optimized for M-series chips
+   - Intel (x86_64) - Compatibility mode
+   - Creates `.app` bundles with Info.plist
+   - Generates notarized DMG installers
+3. **Windows Build**:
+   - x86_64 with WinPcap support
+   - Creates ZIP archives
+4. **Release Creation**:
+   - Generates CHANGELOG.md
+   - Uploads binaries with SHA256 checksums
+   - Publishes GitHub release with notes
 
-### 🚨 USE ONLY ON YOUR OWN NETWORKS 🚨
+## 🔒 Security & Legal
 
-</div>
+### Disclaimer
 
-**Unauthorized access is ILLEGAL under:**
-- Computer Fraud and Abuse Act (USA)
-- Computer Misuse Act (UK)
-- Similar laws worldwide
+**THIS TOOL IS FOR EDUCATIONAL AND AUTHORIZED TESTING ONLY**
 
-**Penalties:**
-- ⚠️ Criminal prosecution
-- ⚠️ Heavy fines ($10,000-$250,000)
-- ⚠️ Imprisonment (up to 20 years)
+✅ **Legal Uses:**
+- Testing your own WiFi network security
+- Authorized penetration testing with written permission
+- Security research and education
+- CTF competitions and challenges
 
-**This tool is for:**
-- ✅ Testing YOUR OWN networks
-- ✅ Educational purposes (learning WPA/WPA2)
-- ✅ Authorized penetration testing
-- ✅ Security research
+❌ **Illegal Activities:**
+- Unauthorized access to networks you don't own
+- Intercepting communications without permission
+- Any malicious or unauthorized use
 
-**NOT for:**
-- ❌ Unauthorized access to networks
-- ❌ Stealing WiFi from neighbors
-- ❌ Malicious purposes
+**Unauthorized access to computer networks is a criminal offense** in most jurisdictions (CFAA in USA, Computer Misuse Act in UK, etc.). Always obtain explicit written permission before testing.
 
-**The author is NOT responsible for misuse.**
+### Responsible Disclosure
 
----
+If you discover security vulnerabilities in this tool:
+1. **Do NOT** publicly disclose before contacting maintainers
+2. Email: [security contact info]
+3. Allow reasonable time for a fix before public disclosure
 
-## 🔐 Protect Your Network
+## 🙏 Acknowledgments
 
-If you're concerned about this tool being used against you:
-
-1. ✅ **Use WPA3** (not vulnerable to offline attacks)
-2. ✅ **Strong password** (16+ random characters with symbols)
-3. ✅ **Disable WPS** (PIN bruteforce vulnerability)
-4. ✅ **Hide SSID** (security through obscurity - minor help)
-5. ✅ **MAC filtering** (can be bypassed, but adds friction)
-6. ✅ **Monitor connected devices** regularly
-
-**Example strong password:**
-```
-t7$mK9#pL2@qN5!wX
-```
-
----
+- [Iced](https://github.com/iced-rs/iced) - Cross-platform GUI framework
+- [Rayon](https://github.com/rayon-rs/rayon) - Data parallelism library
+- [libpcap](https://www.tcpdump.org/) - Packet capture library
+- [pcap-rs](https://github.com/rust-pcap/pcap) - Rust bindings for libpcap
 
 ## 📄 License
 
-MIT License - Educational purposes only
-
-See [LICENSE](LICENSE) for details.
+[MIT License](LICENSE) - Use at your own risk
 
 ---
 
-## 🙏 Credits
+**⭐ If this project helped you, consider starring the repo!**
 
-This tool is for educational purposes and demonstrates:
-- WPA/WPA2 cryptographic protocols (IEEE 802.11i)
-- PBKDF2-HMAC-SHA1 key derivation
-- Parallel computing optimization
-- Rust systems programming
+**🐛 Found a bug?** [Open an issue](https://github.com/maxgfr/bruteforce-wifi/issues/new)
 
-**Learn, don't harm.**
-
----
-
-## 📚 References
-
-- [IEEE 802.11i-2004](https://standards.ieee.org/standard/802_11i-2004.html) - WPA/WPA2 specification
-- [RFC 2898](https://tools.ietf.org/html/rfc2898) - PBKDF2 specification
-- [Aircrack-ng](https://www.aircrack-ng.org/) - WiFi security auditing
-- [Hashcat](https://hashcat.net/hashcat/) - Password recovery tool
+**💡 Have an idea?** [Start a discussion](https://github.com/maxgfr/bruteforce-wifi/discussions)

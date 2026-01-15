@@ -1,6 +1,5 @@
-// Public exports for examples and testing
-pub mod handshake;
-pub mod crypto;
+// Public exports for GUI
+pub mod core;
 
-pub use handshake::Handshake;
-pub use crypto::{calculate_pmk, calculate_ptk, calculate_mic, verify_password};
+// Re-export everything from core
+pub use core::*;

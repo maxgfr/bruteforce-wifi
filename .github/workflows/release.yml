@@ -2,132 +2,202 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main]
 
 permissions:
   contents: write
+  issues: write
+  pull-requests: write
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-    name: Build ${{ matrix.target }}
-    runs-on: ${{ matrix.os }}
+  release:
+    name: Semantic Release
+    runs-on: ubuntu-latest
+    outputs:
+      new_release_published: ${{ steps.semantic.outputs.new_release_published }}
+      new_release_version: ${{ steps.semantic.outputs.new_release_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "lts/*"
+
+      - name: Install semantic-release
+        run: |
+          npm install -g \
+            semantic-release@23 \
+            @semantic-release/changelog@6 \
+            @semantic-release/git@10 \
+            @semantic-release/github@10 \
+            conventional-changelog-conventionalcommits@7
+
+      - name: Run semantic-release
+        id: semantic
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx semantic-release
+
+  build-macos:
+    name: Build macOS (DMG)
+    needs: release
+    if: needs.release.outputs.new_release_published == 'true'
+    runs-on: macos-latest
     strategy:
       matrix:
-        include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            asset_name: bruteforce-wifi-linux-x86_64
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            asset_name: bruteforce-wifi-macos-x86_64
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            asset_name: bruteforce-wifi-macos-aarch64
-
+        target:
+          - aarch64-apple-darwin  # Apple Silicon
+          - x86_64-apple-darwin   # Intel
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.release.outputs.new_release_version }}
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - name: Build binary
+      - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
+        env:
+          RUSTFLAGS: >
+            ${{ matrix.target == 'aarch64-apple-darwin' && '-C target-cpu=apple-m1' || '-C target-cpu=x86-64-v3' }}
 
-      - name: Package binary
-        id: package
+      - name: Create macOS App Bundle
         run: |
-          cd target/${{ matrix.target }}/release
-          tar czf ../../../${{ matrix.asset_name }}.tar.gz bruteforce-wifi
-          cd ../../..
-          echo "asset_path=${{ matrix.asset_name }}.tar.gz" >> $GITHUB_OUTPUT
+          APP_NAME="WiFi Bruteforce"
+          VERSION="${{ needs.release.outputs.new_release_version }}"
+          TARGET="${{ matrix.target }}"
+          APP_DIR="${APP_NAME}.app"
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.asset_name }}
-          path: ${{ steps.package.outputs.asset_path }}
+          mkdir -p "${APP_DIR}/Contents/MacOS"
+          mkdir -p "${APP_DIR}/Contents/Resources"
 
-  release:
-    name: Create Release
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+          # Copy binary
+          cp "target/${TARGET}/release/bruteforce-wifi" "${APP_DIR}/Contents/MacOS/${APP_NAME}"
+          chmod +x "${APP_DIR}/Contents/MacOS/${APP_NAME}"
 
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Generate SHA256 checksums
-        run: |
-          cd artifacts
-          for dir in */; do
-            cd "$dir"
-            sha256sum *.tar.gz > SHA256SUMS
-            cd ..
-          done
-          cd ..
-
-      - name: Generate release notes
-        id: release_notes
-        run: |
-          VERSION=${GITHUB_REF#refs/tags/}
-
-          # Get commits since last tag
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-
-          # Generate changelog from conventional commits
-          FEATURES=$(git log ${PREV_TAG:+$PREV_TAG..}HEAD --pretty=format:"%s" --no-merges | grep -E "^feat(\(.*\))?:" | sed 's/^feat\(([^)]*)\)\?: /- /' || echo "")
-          FIXES=$(git log ${PREV_TAG:+$PREV_TAG..}HEAD --pretty=format:"%s" --no-merges | grep -E "^fix(\(.*\))?:" | sed 's/^fix\(([^)]*)\)\?: /- /' || echo "")
-          CHORES=$(git log ${PREV_TAG:+$PREV_TAG..}HEAD --pretty=format:"%s" --no-merges | grep -E "^chore(\(.*\))?:" | sed 's/^chore\(([^)]*)\)\?: /- /' || echo "")
-          DOCS=$(git log ${PREV_TAG:+$PREV_TAG..}HEAD --pretty=format:"%s" --no-merges | grep -E "^docs(\(.*\))?:" | sed 's/^docs\(([^)]*)\)\?: /- /' || echo "")
-          PERF=$(git log ${PREV_TAG:+$PREV_TAG..}HEAD --pretty=format:"%s" --no-merges | grep -E "^perf(\(.*\))?:" | sed 's/^perf\(([^)]*)\)\?: /- /' || echo "")
-
-          cat > release_notes.md << EOF
-          ## 📡 Bruteforce WiFi $VERSION
-
-          **⚠️ EDUCATIONAL USE ONLY - UNAUTHORIZED ACCESS IS ILLEGAL ⚠️**
-
-          ### 📝 Changelog
-
-          $(if [ -n "$FEATURES" ]; then echo "#### ✨ Features"; echo "$FEATURES"; echo ""; fi)
-          $(if [ -n "$FIXES" ]; then echo "#### 🐛 Bug Fixes"; echo "$FIXES"; echo ""; fi)
-          $(if [ -n "$PERF" ]; then echo "#### ⚡ Performance Improvements"; echo "$PERF"; echo ""; fi)
-          $(if [ -n "$DOCS" ]; then echo "#### 📚 Documentation"; echo "$DOCS"; echo ""; fi)
-          $(if [ -n "$CHORES" ]; then echo "#### 🔧 Chores"; echo "$CHORES"; echo ""; fi)
-
-          ### 📥 Installation
-
-          #### Homebrew (macOS)
-          \`\`\`bash
-          brew tap maxgfr/tap
-          brew install bruteforce-wifi
-          \`\`\`
-
-          #### From binary
-          Download the appropriate binary for your platform below.
-
-          #### From source
-          \`\`\`bash
-          cargo install --git https://github.com/maxgfr/bruteforce-wifi --tag $VERSION
-          \`\`\`
-
-          ### ✅ Checksums
-          SHA256 checksums are available in the \`SHA256SUMS\` files.
+          # Create Info.plist
+          cat > "${APP_DIR}/Contents/Info.plist" << EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleDevelopmentRegion</key>
+              <string>en</string>
+              <key>CFBundleExecutable</key>
+              <string>${APP_NAME}</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.maxgfr.bruteforce-wifi</string>
+              <key>CFBundleInfoDictionaryVersion</key>
+              <string>6.0</string>
+              <key>CFBundleName</key>
+              <string>${APP_NAME}</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>${VERSION}</string>
+              <key>CFBundleVersion</key>
+              <string>${VERSION}</string>
+              <key>LSMinimumSystemVersion</key>
+              <string>11.0</string>
+              <key>NSHighResolutionCapable</key>
+              <true/>
+              <key>NSLocationUsageDescription</key>
+              <string>WiFi Bruteforce needs location access to retrieve WiFi BSSID information for network scanning.</string>
+              <key>NSLocationWhenInUseUsageDescription</key>
+              <string>WiFi Bruteforce needs location access to retrieve WiFi BSSID information for network scanning.</string>
+              <key>LSUIElement</key>
+              <false/>
+          </dict>
+          </plist>
           EOF
 
-      - name: Create Release
+      - name: Create DMG
+        run: |
+          APP_NAME="WiFi Bruteforce"
+          VERSION="${{ needs.release.outputs.new_release_version }}"
+          TARGET="${{ matrix.target }}"
+          ARCH="${{ matrix.target == 'aarch64-apple-darwin' && 'arm64' || 'x86_64' }}"
+          DMG_NAME="WiFi-Bruteforce-${VERSION}-macOS-${ARCH}.dmg"
+          DMG_TEMP="dmg_temp"
+
+          mkdir -p "${DMG_TEMP}"
+          cp -R "${APP_NAME}.app" "${DMG_TEMP}/"
+          ln -s /Applications "${DMG_TEMP}/Applications"
+
+          hdiutil create -volname "${APP_NAME}" \
+            -srcfolder "${DMG_TEMP}" \
+            -ov \
+            -format UDZO \
+            -imagekey zlib-level=9 \
+            "${DMG_NAME}"
+
+          rm -rf "${DMG_TEMP}"
+
+      - name: Generate SHA256
+        run: |
+          TARGET="${{ matrix.target }}"
+          ARCH="${{ matrix.target == 'aarch64-apple-darwin' && 'arm64' || 'x86_64' }}"
+          DMG_NAME="WiFi-Bruteforce-${{ needs.release.outputs.new_release_version }}-macOS-${ARCH}.dmg"
+          shasum -a 256 "${DMG_NAME}" > "${DMG_NAME}.sha256"
+
+      - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
-          body_path: release_notes.md
-          draft: false
-          prerelease: false
+          tag_name: v${{ needs.release.outputs.new_release_version }}
           files: |
-            artifacts/*/*.tar.gz
-            artifacts/*/SHA256SUMS
+            WiFi-Bruteforce-*.dmg
+            WiFi-Bruteforce-*.sha256
+
+  build-windows:
+    name: Build Windows (EXE)
+    needs: release
+    if: needs.release.outputs.new_release_published == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.release.outputs.new_release_version }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install WinPcap SDK
+        run: |
+          Invoke-WebRequest -Uri "https://www.winpcap.org/install/bin/WpdPack_4_1_2.zip" -OutFile "WpdPack.zip"
+          Expand-Archive -Path "WpdPack.zip" -DestinationPath "C:\"
+          echo "LIB=C:\WpdPack\Lib\x64" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build release binary
+        run: cargo build --release
+        env:
+          RUSTFLAGS: "-C target-cpu=x86-64-v3"
+
+      - name: Create installer with WiX
+        run: |
+          $VERSION = "${{ needs.release.outputs.new_release_version }}"
+          $INSTALLER_NAME = "WiFi-Bruteforce-${VERSION}-Windows-x64.msi"
+
+          # Simple ZIP for now (can be enhanced with WiX later)
+          Compress-Archive -Path "target\release\bruteforce-wifi.exe" -DestinationPath "WiFi-Bruteforce-${VERSION}-Windows-x64.zip"
+
+      - name: Generate SHA256
+        run: |
+          $VERSION = "${{ needs.release.outputs.new_release_version }}"
+          $FILE = "WiFi-Bruteforce-${VERSION}-Windows-x64.zip"
+          Get-FileHash -Algorithm SHA256 -Path $FILE | ForEach-Object { "$($_.Hash.ToLower())  $FILE" } | Out-File -FilePath "${FILE}.sha256"
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.release.outputs.new_release_version }}
+          files: |
+            WiFi-Bruteforce-*.zip
+            WiFi-Bruteforce-*.sha256

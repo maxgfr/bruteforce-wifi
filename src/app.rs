@@ -1,0 +1,582 @@
+/*!
+ * Main application state and logic
+ *
+ * Manages the application state machine and handles all messages.
+ */
+
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use iced::time;
+use iced::widget::{button, column, container, horizontal_rule, row, text};
+use iced::{Element, Length, Subscription, Task, Theme};
+
+use crate::screens::{CaptureScreen, CrackMethod, CrackScreen, HandshakeProgress, ScanScreen};
+use crate::theme::colors;
+use crate::workers::{self, CrackState, NumericCrackParams, ScanResult, WordlistCrackParams};
+
+/// Application screens
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Screen {
+    #[default]
+    Scan,
+    Capture,
+    Crack,
+}
+
+/// Application messages
+#[derive(Debug, Clone)]
+pub enum Message {
+    // Navigation
+    GoToScan,
+    GoToCapture,
+    GoToCrack,
+
+    // Scan screen
+    StartScan,
+    StopScan,
+    ScanComplete(ScanResult),
+    SelectNetwork(usize),
+    DeauthNetwork,
+
+    // Capture screen
+    SelectCaptureNetwork(bruteforce_wifi::WifiNetwork),
+    StartCapture,
+    StopCapture,
+    CaptureProgress(workers::CaptureProgress),
+
+    // Crack screen
+    UseCapturedFileToggled(bool),
+    HandshakePathChanged(String),
+    MethodChanged(CrackMethod),
+    MinDigitsChanged(String),
+    MaxDigitsChanged(String),
+    WordlistPathChanged(String),
+    BrowseHandshake,
+    BrowseWordlist,
+    HandshakeSelected(Option<PathBuf>),
+    WordlistSelected(Option<PathBuf>),
+    StartCrack,
+    StopCrack,
+    CrackProgress(workers::CrackProgress),
+    CopyPassword,
+
+    // General
+    Tick,
+}
+
+/// Main application state
+pub struct BruteforceApp {
+    screen: Screen,
+    scan_screen: ScanScreen,
+    capture_screen: CaptureScreen,
+    crack_screen: CrackScreen,
+    interface: String,
+    is_root: bool,
+    crack_state: Option<Arc<CrackState>>,
+    crack_progress_rx: Option<tokio::sync::mpsc::UnboundedReceiver<workers::CrackProgress>>,
+}
+
+impl BruteforceApp {
+    pub fn new(is_root: bool) -> (Self, Task<Message>) {
+        (
+            Self {
+                screen: Screen::Scan,
+                scan_screen: ScanScreen::default(),
+                capture_screen: CaptureScreen::default(),
+                crack_screen: CrackScreen::default(),
+                interface: "en0".to_string(),
+                is_root,
+                crack_state: None,
+                crack_progress_rx: None,
+            },
+            Task::none(),
+        )
+    }
+
+    pub fn theme(&self) -> Theme {
+        Theme::Dark
+    }
+
+    pub fn subscription(&self) -> Subscription<Message> {
+        // Poll for crack progress updates
+        // Reduced from 100ms to 50ms for more responsive UI while maintaining performance
+        if self.crack_progress_rx.is_some() {
+            time::every(std::time::Duration::from_millis(50)).map(|_| Message::Tick)
+        } else {
+            Subscription::none()
+        }
+    }
+
+    pub fn update(&mut self, message: Message) -> Task<Message> {
+        match message {
+            // Navigation
+            Message::GoToScan => {
+                self.screen = Screen::Scan;
+                Task::none()
+            }
+            Message::GoToCapture => {
+                // Populate available networks from scan results
+                self.capture_screen.available_networks = self.scan_screen.networks.clone();
+
+                if let Some(idx) = self.scan_screen.selected_network {
+                    let network = self.scan_screen.networks[idx].clone();
+                    self.capture_screen.target_network = Some(network);
+                    self.capture_screen.handshake_progress = HandshakeProgress::default();
+                    self.capture_screen.handshake_complete = false;
+                    self.capture_screen.error_message = None;
+                }
+                self.screen = Screen::Capture;
+                Task::none()
+            }
+            Message::GoToCrack => {
+                // Set handshake path from capture
+                if !self.capture_screen.output_file.is_empty() {
+                    self.crack_screen.handshake_path = self.capture_screen.output_file.clone();
+                }
+                // Set SSID from captured network
+                if let Some(ref network) = self.capture_screen.target_network {
+                    self.crack_screen.ssid = network.ssid.clone();
+                }
+                self.screen = Screen::Crack;
+                Task::none()
+            }
+
+            // Scan screen
+            Message::StartScan => {
+                self.scan_screen.is_scanning = true;
+                self.scan_screen.error_message = None;
+                self.scan_screen.location_services_warning = false;
+
+                let interface = self.interface.clone();
+                Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || workers::scan_networks_async(interface))
+                            .await
+                            .unwrap_or(ScanResult::Error("Task failed".to_string()))
+                    },
+                    Message::ScanComplete,
+                )
+            }
+            Message::StopScan => {
+                self.scan_screen.is_scanning = false;
+                Task::none()
+            }
+            Message::ScanComplete(result) => {
+                self.scan_screen.is_scanning = false;
+                match result {
+                    ScanResult::Success(networks) => {
+                        self.scan_screen.networks = networks;
+                        self.scan_screen.selected_network = None;
+                    }
+                    ScanResult::PartialSuccess { networks, warning } => {
+                        self.scan_screen.networks = networks;
+                        self.scan_screen.selected_network = None;
+                        self.scan_screen.location_services_warning = true;
+                        self.scan_screen.error_message = Some(warning);
+                    }
+                    ScanResult::Error(msg) => {
+                        self.scan_screen.error_message = Some(msg);
+                    }
+                }
+                Task::none()
+            }
+            Message::SelectNetwork(idx) => {
+                self.scan_screen.selected_network = Some(idx);
+                Task::none()
+            }
+            Message::DeauthNetwork => {
+                self.scan_screen.error_message = Some(
+                    "Deauth attacks are not supported on macOS. macOS does not allow monitor mode or packet injection on WiFi adapters.".to_string()
+                );
+                Task::none()
+            }
+
+            // Capture screen
+            Message::SelectCaptureNetwork(network) => {
+                self.capture_screen.target_network = Some(network);
+                Task::none()
+            }
+            Message::StartCapture => {
+                if let Some(ref _network) = self.capture_screen.target_network {
+                    self.capture_screen.is_capturing = true;
+                    self.capture_screen.error_message = None;
+                    self.capture_screen.packets_captured = 0;
+                    self.capture_screen.handshake_progress = HandshakeProgress::default();
+
+                    // For now, simulate since real capture needs root
+                    Task::perform(
+                        async move {
+                            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                            workers::CaptureProgress::Error(
+                                "Real capture requires running as root with: sudo bruteforce-wifi capture".to_string()
+                            )
+                        },
+                        Message::CaptureProgress,
+                    )
+                } else {
+                    self.capture_screen.error_message =
+                        Some("No target network selected".to_string());
+                    Task::none()
+                }
+            }
+            Message::StopCapture => {
+                self.capture_screen.is_capturing = false;
+                Task::none()
+            }
+            Message::CaptureProgress(progress) => {
+                match progress {
+                    workers::CaptureProgress::PacketsCaptured(count) => {
+                        self.capture_screen.packets_captured = count;
+                    }
+                    workers::CaptureProgress::EapolDetected {
+                        message_type,
+                        ap_mac,
+                        client_mac,
+                    } => {
+                        match message_type {
+                            1 => self.capture_screen.handshake_progress.m1_received = true,
+                            2 => self.capture_screen.handshake_progress.m2_received = true,
+                            3 => self.capture_screen.handshake_progress.m3_received = true,
+                            4 => self.capture_screen.handshake_progress.m4_received = true,
+                            _ => {}
+                        }
+                        self.capture_screen.handshake_progress.last_ap_mac = ap_mac;
+                        self.capture_screen.handshake_progress.last_client_mac = client_mac;
+                    }
+                    workers::CaptureProgress::HandshakeComplete { ssid: _ } => {
+                        self.capture_screen.handshake_complete = true;
+                        self.capture_screen.is_capturing = false;
+                    }
+                    workers::CaptureProgress::Error(msg) => {
+                        self.capture_screen.error_message = Some(msg);
+                        self.capture_screen.is_capturing = false;
+                    }
+                    workers::CaptureProgress::Finished {
+                        output_file,
+                        packets,
+                    } => {
+                        self.capture_screen.output_file = output_file;
+                        self.capture_screen.packets_captured = packets;
+                        self.capture_screen.is_capturing = false;
+                    }
+                    _ => {}
+                }
+                Task::none()
+            }
+
+            // Crack screen
+            Message::UseCapturedFileToggled(enabled) => {
+                self.crack_screen.use_captured_file = enabled;
+                if enabled {
+                    // Auto-populate from capture screen
+                    self.crack_screen.handshake_path = self.capture_screen.output_file.clone();
+                }
+                Task::none()
+            }
+            Message::HandshakePathChanged(path) => {
+                self.crack_screen.handshake_path = path;
+                Task::none()
+            }
+            Message::MethodChanged(method) => {
+                self.crack_screen.method = method;
+                Task::none()
+            }
+            Message::MinDigitsChanged(val) => {
+                if val.is_empty() || val.parse::<usize>().is_ok() {
+                    self.crack_screen.min_digits = val;
+                }
+                Task::none()
+            }
+            Message::MaxDigitsChanged(val) => {
+                if val.is_empty() || val.parse::<usize>().is_ok() {
+                    self.crack_screen.max_digits = val;
+                }
+                Task::none()
+            }
+            Message::WordlistPathChanged(path) => {
+                self.crack_screen.wordlist_path = path;
+                Task::none()
+            }
+            Message::BrowseHandshake => Task::perform(
+                async {
+                    rfd::AsyncFileDialog::new()
+                        .add_filter("Capture files", &["cap", "pcap", "json"])
+                        .set_title("Select Handshake File")
+                        .pick_file()
+                        .await
+                        .map(|f| f.path().to_path_buf())
+                },
+                Message::HandshakeSelected,
+            ),
+            Message::BrowseWordlist => Task::perform(
+                async {
+                    rfd::AsyncFileDialog::new()
+                        .add_filter("Wordlist files", &["txt", "lst"])
+                        .set_title("Select Wordlist File")
+                        .pick_file()
+                        .await
+                        .map(|f| f.path().to_path_buf())
+                },
+                Message::WordlistSelected,
+            ),
+            Message::HandshakeSelected(path) => {
+                if let Some(p) = path {
+                    self.crack_screen.handshake_path = p.display().to_string();
+                }
+                Task::none()
+            }
+            Message::WordlistSelected(path) => {
+                if let Some(p) = path {
+                    self.crack_screen.wordlist_path = p.display().to_string();
+                }
+                Task::none()
+            }
+            Message::StartCrack => {
+                self.crack_screen.is_cracking = true;
+                self.crack_screen.error_message = None;
+                self.crack_screen.found_password = None;
+                self.crack_screen.current_attempts = 0;
+                self.crack_screen.progress = 0.0;
+                self.crack_screen.status_message = "Starting...".to_string();
+                self.crack_screen.log_messages.clear();
+
+                let state = Arc::new(CrackState::new());
+                self.crack_state = Some(state.clone());
+
+                let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+                self.crack_progress_rx = Some(rx);
+
+                match self.crack_screen.method {
+                    CrackMethod::Numeric => {
+                        let params = NumericCrackParams {
+                            handshake_path: PathBuf::from(&self.crack_screen.handshake_path),
+                            ssid: if self.crack_screen.ssid.is_empty() {
+                                None
+                            } else {
+                                Some(self.crack_screen.ssid.clone())
+                            },
+                            min_digits: self.crack_screen.min_digits.parse().unwrap_or(8),
+                            max_digits: self.crack_screen.max_digits.parse().unwrap_or(8),
+                            threads: self.crack_screen.threads,
+                        };
+
+                        // Calculate total
+                        let mut total: u64 = 0;
+                        for len in params.min_digits..=params.max_digits {
+                            total += 10u64.pow(len as u32);
+                        }
+                        self.crack_screen.total_attempts = total;
+
+                        Task::perform(
+                            workers::crack_numeric_async(params, state, tx),
+                            Message::CrackProgress,
+                        )
+                    }
+                    CrackMethod::Wordlist => {
+                        let params = WordlistCrackParams {
+                            handshake_path: PathBuf::from(&self.crack_screen.handshake_path),
+                            ssid: if self.crack_screen.ssid.is_empty() {
+                                None
+                            } else {
+                                Some(self.crack_screen.ssid.clone())
+                            },
+                            wordlist_path: PathBuf::from(&self.crack_screen.wordlist_path),
+                            threads: self.crack_screen.threads,
+                        };
+
+                        Task::perform(
+                            workers::crack_wordlist_async(params, state, tx),
+                            Message::CrackProgress,
+                        )
+                    }
+                }
+            }
+            Message::StopCrack => {
+                if let Some(ref state) = self.crack_state {
+                    state.stop();
+                }
+                self.crack_screen.is_cracking = false;
+                self.crack_screen.status_message = "Stopped".to_string();
+                self.crack_progress_rx = None;
+                Task::none()
+            }
+            Message::CrackProgress(progress) => {
+                match progress {
+                    workers::CrackProgress::Started { total } => {
+                        self.crack_screen.total_attempts = total;
+                        self.crack_screen.status_message = "Cracking...".to_string();
+                    }
+                    workers::CrackProgress::Progress {
+                        current,
+                        total,
+                        rate,
+                    } => {
+                        self.crack_screen.current_attempts = current;
+                        self.crack_screen.total_attempts = total;
+                        self.crack_screen.rate = rate;
+                        self.crack_screen.progress = if total > 0 {
+                            current as f32 / total as f32
+                        } else {
+                            0.0
+                        };
+                    }
+                    workers::CrackProgress::Log(msg) => {
+                        self.crack_screen.log_messages.push(msg);
+                        // Keep only last 50 logs
+                        if self.crack_screen.log_messages.len() > 50 {
+                            self.crack_screen.log_messages.remove(0);
+                        }
+                    }
+                    workers::CrackProgress::Found(password) => {
+                        self.crack_screen.found_password = Some(password);
+                        self.crack_screen.status_message = "Password found!".to_string();
+                        self.crack_screen.progress = 1.0;
+                        self.crack_screen.is_cracking = false;
+                        self.crack_progress_rx = None;
+                    }
+                    workers::CrackProgress::NotFound => {
+                        self.crack_screen.status_message = "Password not found".to_string();
+                        self.crack_screen.progress = 1.0;
+                        self.crack_screen.is_cracking = false;
+                        self.crack_progress_rx = None;
+                    }
+                    workers::CrackProgress::Error(msg) => {
+                        self.crack_screen.error_message = Some(msg);
+                        self.crack_screen.status_message = "Error occurred".to_string();
+                        self.crack_screen.is_cracking = false;
+                        self.crack_progress_rx = None;
+                    }
+                }
+                Task::none()
+            }
+            Message::CopyPassword => {
+                // TODO: Copy to clipboard
+                Task::none()
+            }
+            Message::Tick => {
+                // Poll for crack progress
+                if let Some(ref mut rx) = self.crack_progress_rx {
+                    let mut messages = Vec::new();
+                    while let Ok(progress) = rx.try_recv() {
+                        messages.push(Message::CrackProgress(progress));
+                    }
+                    if !messages.is_empty() {
+                        return Task::batch(messages.into_iter().map(|m| Task::done(m)));
+                    }
+                }
+                Task::none()
+            }
+        }
+    }
+
+    pub fn view(&self) -> Element<'_, Message> {
+        // Root warning banner
+        let root_warning = if !self.is_root {
+            Some(
+                container(
+                    row![
+                        text("⚠ ").size(16).color(colors::WARNING),
+                        text("Not running as root - Scan and Capture features require root privileges. Run with: ")
+                            .size(13)
+                            .color(colors::TEXT_DIM),
+                        text("sudo ./target/release/bruteforce-wifi")
+                            .size(13)
+                            .color(colors::WARNING)
+                    ]
+                    .align_y(iced::Alignment::Center)
+                    .padding([8, 15]),
+                )
+                .width(Length::Fill)
+                .style(|_| container::Style {
+                    background: Some(iced::Background::Color(iced::Color::from_rgba(
+                        0.95, 0.77, 0.06, 0.15,
+                    ))),
+                    border: iced::Border {
+                        color: colors::WARNING,
+                        width: 1.0,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+            )
+        } else {
+            None
+        };
+
+        // Navigation header
+        let nav = container(
+            row![
+                nav_button("1. Scan", Screen::Scan, self.screen),
+                text("→").size(16).color(colors::TEXT_DIM),
+                nav_button("2. Capture", Screen::Capture, self.screen),
+                text("→").size(16).color(colors::TEXT_DIM),
+                nav_button("3. Crack", Screen::Crack, self.screen),
+            ]
+            .spacing(15)
+            .align_y(iced::Alignment::Center)
+            .padding([10, 20]),
+        )
+        .width(Length::Fill)
+        .style(|_| container::Style {
+            background: Some(iced::Background::Color(colors::SURFACE)),
+            ..Default::default()
+        });
+
+        // Current screen content
+        let content = match self.screen {
+            Screen::Scan => self.scan_screen.view(),
+            Screen::Capture => self.capture_screen.view(),
+            Screen::Crack => self.crack_screen.view(),
+        };
+
+        let mut main_col = column![nav, horizontal_rule(1)];
+        if let Some(warning) = root_warning {
+            main_col = main_col.push(warning);
+        }
+        main_col = main_col.push(content);
+
+        main_col.into()
+    }
+}
+
+/// Navigation button helper
+fn nav_button(label: &str, target: Screen, current: Screen) -> Element<'_, Message> {
+    let is_active = target == current;
+    let color = if is_active {
+        colors::PRIMARY
+    } else {
+        colors::TEXT_DIM
+    };
+
+    let msg = match target {
+        Screen::Scan => Message::GoToScan,
+        Screen::Capture => Message::GoToCapture,
+        Screen::Crack => Message::GoToCrack,
+    };
+
+    button(text(label).size(14).color(color))
+        .padding([8, 12])
+        .style(move |_, status| {
+            let bg = match status {
+                iced::widget::button::Status::Hovered => {
+                    Some(iced::Background::Color(colors::SURFACE_HOVER))
+                }
+                _ if is_active => Some(iced::Background::Color(iced::Color::from_rgba(
+                    0.18, 0.55, 0.34, 0.2,
+                ))),
+                _ => None,
+            };
+            iced::widget::button::Style {
+                background: bg,
+                text_color: color,
+                border: iced::Border {
+                    radius: 4.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        })
+        .on_press(msg)
+        .into()
+}
