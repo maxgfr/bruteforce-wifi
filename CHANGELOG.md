@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.0](https://github.com/maxgfr/bruteforce-wifi/compare/v1.0.0...v1.1.0) (2026-01-16)
+
+
+### ✨ Features
+
+* Update dependencies and enhance network scanning functionality ([dc02c1c](https://github.com/maxgfr/bruteforce-wifi/commit/dc02c1c3baf5244eca84544eb5c1bd6f6e9112f6))
+
 ## 1.0.0 (2026-01-15)
 
 
