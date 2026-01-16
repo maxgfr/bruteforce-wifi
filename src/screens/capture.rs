@@ -414,11 +414,13 @@ impl CaptureScreen {
             content = content.push(error);
         }
 
-        content = content.push(
-            row![back_btn, horizontal_space(), capture_btn,]
-                .push_maybe(continue_btn.map(|btn| row![text("  "), btn,]))
-                .spacing(10),
-        );
+        let mut button_row = row![back_btn, horizontal_space(), capture_btn,].spacing(10);
+
+        if let Some(btn) = continue_btn {
+            button_row = button_row.push(btn);
+        }
+
+        content = content.push(button_row);
 
         container(content.padding(20))
             .width(Length::Fill)

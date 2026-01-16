@@ -216,17 +216,29 @@ pub async fn crack_wordlist_async(
     use std::fs::File;
     use std::io::{BufRead, BufReader};
 
-    // Load handshake
+    // Load handshake with panic protection
     let _ = progress_tx.send(CrackProgress::Log("Loading handshake...".to_string()));
-    let handshake = match parse_cap_file(&params.handshake_path, params.ssid.as_deref()) {
-        Ok(h) => {
+    let handshake = match std::panic::catch_unwind(|| {
+        parse_cap_file(&params.handshake_path, params.ssid.as_deref())
+    }) {
+        Ok(Ok(h)) => {
             let _ = progress_tx.send(CrackProgress::Log(format!(
                 "Handshake loaded: SSID={}",
                 h.ssid
             )));
             h
         }
-        Err(e) => return CrackProgress::Error(e.to_string()),
+        Ok(Err(e)) => return CrackProgress::Error(format!("Failed to parse handshake: {}", e)),
+        Err(panic_err) => {
+            return CrackProgress::Error(format!(
+                "Panic while parsing handshake: {:?}",
+                panic_err
+                    .downcast_ref::<String>()
+                    .map(|s| s.as_str())
+                    .or_else(|| panic_err.downcast_ref::<&str>().copied())
+                    .unwrap_or("Unknown panic")
+            ))
+        }
     };
 
     // Load wordlist
@@ -355,17 +367,29 @@ pub async fn crack_numeric_async(
     use bruteforce_wifi::password_gen::ParallelPasswordGenerator;
     use rayon::prelude::*;
 
-    // Load handshake
+    // Load handshake with panic protection
     let _ = progress_tx.send(CrackProgress::Log("Loading handshake...".to_string()));
-    let handshake = match parse_cap_file(&params.handshake_path, params.ssid.as_deref()) {
-        Ok(h) => {
+    let handshake = match std::panic::catch_unwind(|| {
+        parse_cap_file(&params.handshake_path, params.ssid.as_deref())
+    }) {
+        Ok(Ok(h)) => {
             let _ = progress_tx.send(CrackProgress::Log(format!(
                 "Handshake loaded: SSID={}",
                 h.ssid
             )));
             h
         }
-        Err(e) => return CrackProgress::Error(e.to_string()),
+        Ok(Err(e)) => return CrackProgress::Error(format!("Failed to parse handshake: {}", e)),
+        Err(panic_err) => {
+            return CrackProgress::Error(format!(
+                "Panic while parsing handshake: {:?}",
+                panic_err
+                    .downcast_ref::<String>()
+                    .map(|s| s.as_str())
+                    .or_else(|| panic_err.downcast_ref::<&str>().copied())
+                    .unwrap_or("Unknown panic")
+            ))
+        }
     };
 
     // Calculate total
