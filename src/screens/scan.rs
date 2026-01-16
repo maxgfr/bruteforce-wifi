@@ -183,7 +183,9 @@ impl ScanScreen {
                     // Check if this network has multiple channels (grouped SSIDs)
                     let has_multiple_channels = network.channel.contains(',');
                     let channel_display = if has_multiple_channels {
-                        format!("Channels: {}", network.channel)
+                        // Add spaces between channel numbers for better readability
+                        let channels_with_spaces = network.channel.replace(',', ", ");
+                        format!("Channels: {}", channels_with_spaces)
                     } else {
                         format!("Ch {}", network.channel)
                     };

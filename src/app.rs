@@ -145,6 +145,15 @@ impl BruteforceApp {
                 if let Some(ref network) = self.capture_screen.target_network {
                     self.crack_screen.ssid = network.ssid.clone();
                 }
+
+                // Reset crack screen state
+                self.crack_screen.error_message = None;
+                self.crack_screen.found_password = None;
+                self.crack_screen.password_not_found = false;
+                self.crack_screen.current_attempts = 0;
+                self.crack_screen.progress = 0.0;
+                self.crack_screen.log_messages.clear();
+
                 self.screen = Screen::Crack;
                 Task::none()
             }

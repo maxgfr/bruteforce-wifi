@@ -39,7 +39,7 @@ pcap = "2.4.0"
 libc = "0.2"
 
 # GUI dependencies (Iced)
-iced = { version = "0.13", features = ["tokio", "advanced"] }
+iced = { version = "0.13.1", features = ["tokio", "advanced"] }
 rfd = "0.15"
 
 [profile.release]

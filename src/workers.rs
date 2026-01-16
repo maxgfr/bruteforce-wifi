@@ -123,15 +123,18 @@ pub fn scan_networks_async(interface: String) -> ScanResult {
             if networks.is_empty() {
                 ScanResult::Error("No networks found".to_string())
             } else {
+                // Compact duplicate networks (same SSID, different channels/BSSIDs)
+                let compacted_networks = bruteforce_wifi::compact_duplicate_networks(networks);
+
                 // Check if BSSIDs are missing (Location Services issue)
-                let has_bssids = networks.iter().any(|n| !n.bssid.is_empty());
+                let has_bssids = compacted_networks.iter().any(|n| !n.bssid.is_empty());
                 if !has_bssids {
                     ScanResult::PartialSuccess {
-                        networks,
+                        networks: compacted_networks,
                         warning: "Location Services permission required to access WiFi BSSIDs. Enable it in System Settings > Privacy & Security > Location Services.".to_string()
                     }
                 } else {
-                    ScanResult::Success(networks)
+                    ScanResult::Success(compacted_networks)
                 }
             }
         }

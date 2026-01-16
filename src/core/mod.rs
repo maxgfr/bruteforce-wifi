@@ -10,4 +10,6 @@ pub mod security;
 pub use bruteforce::OfflineBruteForcer;
 pub use crypto::{calculate_mic, calculate_pmk, calculate_ptk, verify_password};
 pub use handshake::{extract_eapol_from_packet, parse_cap_file, EapolPacket, Handshake};
-pub use network::{capture_traffic, scan_networks, CaptureOptions, WifiNetwork};
+pub use network::{
+    capture_traffic, compact_duplicate_networks, scan_networks, CaptureOptions, WifiNetwork,
+};
