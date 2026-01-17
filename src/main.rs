@@ -12,6 +12,7 @@ mod app;
 mod screens;
 mod theme;
 mod workers;
+mod workers_optimized;
 
 use app::BruteforceApp;
 use iced::Size;

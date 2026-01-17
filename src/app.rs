@@ -17,6 +17,7 @@ use crate::workers::{
     self, CaptureParams, CaptureState, CrackState, NumericCrackParams, ScanResult,
     WordlistCrackParams,
 };
+use crate::workers_optimized;
 
 /// Application screens
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -462,10 +463,14 @@ impl BruteforceApp {
                         }
                         self.crack_screen.total_attempts = total;
 
-                        Task::perform(
-                            workers::crack_numeric_async(params, state, tx),
-                            Message::CrackProgress,
-                        )
+                        // Spawn the crack task in the background without blocking the UI
+                        // The progress will be sent via the channel and polled by the Tick subscription
+                        tokio::spawn(async move {
+                            let _ =
+                                workers_optimized::crack_numeric_optimized(params, state, tx).await;
+                        });
+
+                        Task::none()
                     }
                     CrackMethod::Wordlist => {
                         let params = WordlistCrackParams {
@@ -479,10 +484,14 @@ impl BruteforceApp {
                             threads: self.crack_screen.threads,
                         };
 
-                        Task::perform(
-                            workers::crack_wordlist_async(params, state, tx),
-                            Message::CrackProgress,
-                        )
+                        // Spawn the crack task in the background without blocking the UI
+                        // The progress will be sent via the channel and polled by the Tick subscription
+                        tokio::spawn(async move {
+                            let _ = workers_optimized::crack_wordlist_optimized(params, state, tx)
+                                .await;
+                        });
+
+                        Task::none()
                     }
                 }
             }
