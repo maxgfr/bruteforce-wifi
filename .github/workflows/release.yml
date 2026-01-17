@@ -88,8 +88,41 @@ jobs:
           mkdir -p "${APP_DIR}/Contents/MacOS"
           mkdir -p "${APP_DIR}/Contents/Resources"
 
-          # Copy binary
-          cp "target/${TARGET}/release/bruteforce-wifi" "${APP_DIR}/Contents/MacOS/${APP_NAME}"
+          # Copy binary to a different name (the actual executable)
+          cp "target/${TARGET}/release/bruteforce-wifi" "${APP_DIR}/Contents/MacOS/${APP_NAME}_bin"
+          chmod +x "${APP_DIR}/Contents/MacOS/${APP_NAME}_bin"
+
+          # Create a launcher script that requests root privileges
+          cat > "${APP_DIR}/Contents/MacOS/${APP_NAME}" << LAUNCHER_EOF
+          #!/bin/bash
+          # Launcher script that requests root privileges
+
+          # Get the directory where this script is located
+          SCRIPT_DIR="\$( cd "\$( dirname "\${BASH_SOURCE[0]}" )" && pwd )"
+          BINARY="\${SCRIPT_DIR}/${APP_NAME}_bin"
+
+          # Get the app bundle path (parent of Contents)
+          APP_PATH="\$(dirname "\$(dirname "\${SCRIPT_DIR}")")"
+
+          # Remove quarantine attributes if present (needed for unsigned apps)
+          if [ "\$EUID" -eq 0 ]; then
+              # Running as root, remove quarantine attributes
+              xattr -cr "\${APP_PATH}" 2>/dev/null || true
+          fi
+
+          # Check if running as root
+          if [ "\$EUID" -ne 0 ]; then
+              # Not running as root, re-launch with sudo
+              echo "This application requires root privileges to perform WiFi network operations."
+              sudo "\$BINARY" "\$@"
+              exit \$?
+          else
+              # Already running as root
+              exec "\$BINARY" "\$@"
+          fi
+          LAUNCHER_EOF
+
+          # Make the launcher executable
           chmod +x "${APP_DIR}/Contents/MacOS/${APP_NAME}"
 
           # Create Info.plist
@@ -124,6 +157,13 @@ jobs:
               <string>WiFi Bruteforce needs location access to retrieve WiFi BSSID information for network scanning.</string>
               <key>LSUIElement</key>
               <false/>
+              <key>LSRequiresRoot</key>
+              <true/>
+              <key>SMPrivilegedExecutables</key>
+              <dict>
+                  <key>com.maxgfr.bruteforce-wifi.helper</key>
+                  <string>anchor apple generic and identifier "com.maxgfr.bruteforce-wifi.helper"</string>
+              </dict>
           </dict>
           </plist>
           EOF
