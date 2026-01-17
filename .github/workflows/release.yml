@@ -55,7 +55,7 @@ jobs:
   build-macos:
     name: Build macOS (DMG)
     needs: release
-    # if: needs.release.outputs.new_release_published == 'true'
+    if: needs.release.outputs.new_release_published == 'true'
     runs-on: macos-latest
     strategy:
       matrix:
@@ -127,6 +127,11 @@ jobs:
           </dict>
           </plist>
           EOF
+
+          # Ad-hoc signing (required for Apple Silicon to run at all)
+          # Note: This does NOT fix the "Developer cannot be verified" warning for downloaded apps.
+          # Users currently need to run: xattr -cr "/Applications/WiFi Bruteforce.app"
+          codesign --force --deep --sign - "${APP_DIR}"
 
       - name: Create DMG
         run: |
@@ -216,3 +221,48 @@ jobs:
           files: |
             WiFi-Bruteforce-*.zip
             WiFi-Bruteforce-*.sha256
+
+  build-linux:
+    name: Build Linux
+    needs: release
+    # if: needs.release.outputs.new_release_published == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release.outputs.new_release_published == 'true' && format('v{0}', needs.release.outputs.new_release_version) || '' }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpcap-dev libxkbcommon-dev libwayland-dev libgtk-3-dev
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Create Archive
+        run: |
+          VERSION="${{ needs.release.outputs.new_release_version }}"
+          if [ -z "$VERSION" ]; then VERSION="0.0.0-dev.${{ github.run_number }}"; fi
+          ARCHIVE_NAME="WiFi-Bruteforce-${VERSION}-Linux-x86_64.tar.gz"
+
+          mkdir -p release_dist
+          cp target/release/bruteforce-wifi release_dist/
+
+          tar -czf "$ARCHIVE_NAME" -C release_dist .
+
+      - name: Generate SHA256
+        run: |
+          FILE=$(ls WiFi-Bruteforce-*-Linux-*.tar.gz | head -n 1)
+          shasum -a 256 "$FILE" > "$FILE.sha256"
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        if: needs.release.outputs.new_release_published == 'true'
+        with:
+          tag_name: v${{ needs.release.outputs.new_release_version }}
+          files: |
+            WiFi-Bruteforce-*-Linux-*.tar.gz
+            WiFi-Bruteforce-*-Linux-*.sha256
