@@ -2,8 +2,9 @@
  * Optimized background workers for async operations
  */
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use bruteforce_wifi::{parse_cap_file, OfflineBruteForcer};
 
@@ -15,7 +16,6 @@ pub async fn crack_wordlist_optimized(
     state: Arc<CrackState>,
     progress_tx: tokio::sync::mpsc::UnboundedSender<CrackProgress>,
 ) -> CrackProgress {
-    // Run entire crack process in blocking thread to avoid UI freeze
     match tokio::task::spawn_blocking(move || crack_wordlist_blocking(params, state, progress_tx))
         .await
     {
@@ -35,15 +35,22 @@ fn crack_wordlist_blocking(
 
     // Load handshake
     let _ = progress_tx.send(CrackProgress::Log("Loading handshake...".to_string()));
-    let handshake = match parse_cap_file(&params.handshake_path, params.ssid.as_deref()) {
-        Ok(h) => {
+    let handshake = match std::panic::catch_unwind(|| {
+        parse_cap_file(&params.handshake_path, params.ssid.as_deref())
+    }) {
+        Ok(Ok(h)) => {
             let _ = progress_tx.send(CrackProgress::Log(format!(
                 "Handshake loaded: SSID={}",
                 h.ssid
             )));
             h
         }
-        Err(e) => return CrackProgress::Error(format!("Failed to parse handshake: {}", e)),
+        Ok(Err(e)) => return CrackProgress::Error(format!("Failed to parse handshake: {}", e)),
+        Err(_) => {
+            return CrackProgress::Error(
+                "Crash while parsing handshake file. The file may be corrupted.".to_string(),
+            )
+        }
     };
 
     // Load wordlist
@@ -84,9 +91,10 @@ fn crack_wordlist_blocking(
         params.threads
     )));
 
-    // Run crack
-    let start = std::time::Instant::now();
-    let chunk_size = (passwords.len() / (params.threads * 4)).clamp(500, 50000);
+    // Run crack with time-based progress updates
+    let start = Instant::now();
+    let last_update = Arc::new(AtomicU64::new(0));
+    let chunk_size = (passwords.len() / params.threads).clamp(1000, 50_000);
 
     let found_password: Arc<parking_lot::Mutex<Option<String>>> =
         Arc::new(parking_lot::Mutex::new(None));
@@ -105,19 +113,26 @@ fn crack_wordlist_blocking(
 
             let current = state.attempts.fetch_add(1, Ordering::Relaxed);
 
-            // Send progress every 10000 attempts to reduce channel overhead
-            if current.is_multiple_of(10000) {
-                let elapsed = start.elapsed().as_secs_f64();
-                let rate = if elapsed > 0.0 {
-                    current as f64 / elapsed
-                } else {
-                    0.0
-                };
-                let _ = progress_tx.send(CrackProgress::Progress {
-                    current,
-                    total,
-                    rate,
-                });
+            // Time-based progress: update every 1 second
+            let elapsed_ms = start.elapsed().as_millis() as u64;
+            let last = last_update.load(Ordering::Relaxed);
+            if elapsed_ms >= last + 1000 {
+                if last_update
+                    .compare_exchange(last, elapsed_ms, Ordering::Relaxed, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    let elapsed_secs = elapsed_ms as f64 / 1000.0;
+                    let rate = if elapsed_secs > 0.0 {
+                        current as f64 / elapsed_secs
+                    } else {
+                        0.0
+                    };
+                    let _ = progress_tx.send(CrackProgress::Progress {
+                        current,
+                        total,
+                        rate,
+                    });
+                }
             }
 
             if bruteforce_wifi::verify_password(
@@ -137,6 +152,20 @@ fn crack_wordlist_blocking(
             }
         }
         false
+    });
+
+    // Final progress update
+    let elapsed_secs = start.elapsed().as_secs_f64();
+    let current = state.attempts.load(Ordering::Relaxed);
+    let rate = if elapsed_secs > 0.0 {
+        current as f64 / elapsed_secs
+    } else {
+        0.0
+    };
+    let _ = progress_tx.send(CrackProgress::Progress {
+        current,
+        total,
+        rate,
     });
 
     // Check result
@@ -163,7 +192,6 @@ pub async fn crack_numeric_optimized(
     state: Arc<CrackState>,
     progress_tx: tokio::sync::mpsc::UnboundedSender<CrackProgress>,
 ) -> CrackProgress {
-    // Run entire crack process in blocking thread to avoid UI freeze
     match tokio::task::spawn_blocking(move || crack_numeric_blocking(params, state, progress_tx))
         .await
     {
@@ -182,15 +210,22 @@ fn crack_numeric_blocking(
 
     // Load handshake
     let _ = progress_tx.send(CrackProgress::Log("Loading handshake...".to_string()));
-    let handshake = match parse_cap_file(&params.handshake_path, params.ssid.as_deref()) {
-        Ok(h) => {
+    let handshake = match std::panic::catch_unwind(|| {
+        parse_cap_file(&params.handshake_path, params.ssid.as_deref())
+    }) {
+        Ok(Ok(h)) => {
             let _ = progress_tx.send(CrackProgress::Log(format!(
                 "Handshake loaded: SSID={}",
                 h.ssid
             )));
             h
         }
-        Err(e) => return CrackProgress::Error(format!("Failed to parse handshake: {}", e)),
+        Ok(Err(e)) => return CrackProgress::Error(format!("Failed to parse handshake: {}", e)),
+        Err(_) => {
+            return CrackProgress::Error(
+                "Crash while parsing handshake file. The file may be corrupted.".to_string(),
+            )
+        }
     };
 
     // Calculate total
@@ -210,8 +245,9 @@ fn crack_numeric_blocking(
         params.threads
     )));
 
-    // Run crack
-    let start = std::time::Instant::now();
+    // Run crack with time-based progress updates
+    let start = Instant::now();
+    let last_update = Arc::new(AtomicU64::new(0));
     let found_password: Arc<parking_lot::Mutex<Option<String>>> =
         Arc::new(parking_lot::Mutex::new(None));
     let found_flag = Arc::new(AtomicBool::new(false));
@@ -232,6 +268,7 @@ fn crack_numeric_blocking(
             let found_ref = Arc::clone(&found_flag);
             let found_password_ref = Arc::clone(&found_password);
             let state_ref = Arc::clone(&state);
+            let last_update_ref = Arc::clone(&last_update);
 
             let _result = batch.par_iter().find_any(|password| {
                 if found_ref.load(Ordering::Acquire) || !state_ref.running.load(Ordering::Relaxed) {
@@ -240,19 +277,26 @@ fn crack_numeric_blocking(
 
                 let current = state_ref.attempts.fetch_add(1, Ordering::Relaxed);
 
-                // Send progress every 10000 attempts to reduce channel overhead
-                if current.is_multiple_of(10000) {
-                    let elapsed = start.elapsed().as_secs_f64();
-                    let rate = if elapsed > 0.0 {
-                        current as f64 / elapsed
-                    } else {
-                        0.0
-                    };
-                    let _ = progress_tx.send(CrackProgress::Progress {
-                        current,
-                        total,
-                        rate,
-                    });
+                // Time-based progress: update every 1 second
+                let elapsed_ms = start.elapsed().as_millis() as u64;
+                let last = last_update_ref.load(Ordering::Relaxed);
+                if elapsed_ms >= last + 1000 {
+                    if last_update_ref
+                        .compare_exchange(last, elapsed_ms, Ordering::Relaxed, Ordering::Relaxed)
+                        .is_ok()
+                    {
+                        let elapsed_secs = elapsed_ms as f64 / 1000.0;
+                        let rate = if elapsed_secs > 0.0 {
+                            current as f64 / elapsed_secs
+                        } else {
+                            0.0
+                        };
+                        let _ = progress_tx.send(CrackProgress::Progress {
+                            current,
+                            total,
+                            rate,
+                        });
+                    }
                 }
 
                 if bruteforce_wifi::verify_password(
@@ -279,6 +323,20 @@ fn crack_numeric_blocking(
             }
         }
     }
+
+    // Final progress update
+    let elapsed_secs = start.elapsed().as_secs_f64();
+    let current = state.attempts.load(Ordering::Relaxed);
+    let rate = if elapsed_secs > 0.0 {
+        current as f64 / elapsed_secs
+    } else {
+        0.0
+    };
+    let _ = progress_tx.send(CrackProgress::Progress {
+        current,
+        total,
+        rate,
+    });
 
     // Check result
     if found_flag.load(Ordering::Acquire) {

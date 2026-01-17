@@ -386,10 +386,10 @@ impl CrackScreen {
             }
         };
 
-        let back_btn = button(text("Back to Capture").size(14))
+        let back_btn = button(text("Back to Scan").size(14))
             .padding([10, 20])
             .style(theme::secondary_button_style)
-            .on_press(Message::GoToCapture);
+            .on_press(Message::GoToScanCapture);
 
         // Logs display
         let logs_display = if !self.log_messages.is_empty() {

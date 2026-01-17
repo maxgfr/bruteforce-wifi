@@ -11,7 +11,7 @@ use iced::time;
 use iced::widget::{button, column, container, horizontal_rule, row, text};
 use iced::{Element, Length, Subscription, Task, Theme};
 
-use crate::screens::{CaptureScreen, CrackMethod, CrackScreen, HandshakeProgress, ScanScreen};
+use crate::screens::{CrackMethod, CrackScreen, HandshakeProgress, ScanCaptureScreen};
 use crate::theme::colors;
 use crate::workers::{
     self, CaptureParams, CaptureState, CrackState, NumericCrackParams, ScanResult,
@@ -23,8 +23,7 @@ use crate::workers_optimized;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Screen {
     #[default]
-    Scan,
-    Capture,
+    ScanCapture,
     Crack,
 }
 
@@ -32,19 +31,14 @@ pub enum Screen {
 #[derive(Debug, Clone)]
 pub enum Message {
     // Navigation
-    GoToScan,
-    GoToCapture,
+    GoToScanCapture,
     GoToCrack,
 
-    // Scan screen
+    // Scan & Capture screen
     StartScan,
     StopScan,
     ScanComplete(ScanResult),
     SelectNetwork(usize),
-    DeauthNetwork,
-
-    // Capture screen
-    SelectCaptureNetwork(bruteforce_wifi::WifiNetwork),
     StartCapture,
     StopCapture,
     CaptureProgress(workers::CaptureProgress),
@@ -72,8 +66,7 @@ pub enum Message {
 /// Main application state
 pub struct BruteforceApp {
     screen: Screen,
-    scan_screen: ScanScreen,
-    capture_screen: CaptureScreen,
+    scan_capture_screen: ScanCaptureScreen,
     crack_screen: CrackScreen,
     interface: String,
     is_root: bool,
@@ -87,9 +80,8 @@ impl BruteforceApp {
     pub fn new(is_root: bool) -> (Self, Task<Message>) {
         (
             Self {
-                screen: Screen::Scan,
-                scan_screen: ScanScreen::default(),
-                capture_screen: CaptureScreen::default(),
+                screen: Screen::ScanCapture,
+                scan_capture_screen: ScanCaptureScreen::default(),
                 crack_screen: CrackScreen::default(),
                 interface: "en0".to_string(),
                 is_root,
@@ -119,33 +111,17 @@ impl BruteforceApp {
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             // Navigation
-            Message::GoToScan => {
-                self.screen = Screen::Scan;
-                Task::none()
-            }
-            Message::GoToCapture => {
-                // Populate available networks from scan results
-                self.capture_screen.available_networks = self.scan_screen.networks.clone();
-
-                if let Some(idx) = self.scan_screen.selected_network {
-                    // Safe access with bounds check
-                    if let Some(network) = self.scan_screen.networks.get(idx) {
-                        self.capture_screen.target_network = Some(network.clone());
-                        self.capture_screen.handshake_progress = HandshakeProgress::default();
-                        self.capture_screen.handshake_complete = false;
-                        self.capture_screen.error_message = None;
-                    }
-                }
-                self.screen = Screen::Capture;
+            Message::GoToScanCapture => {
+                self.screen = Screen::ScanCapture;
                 Task::none()
             }
             Message::GoToCrack => {
                 // Set handshake path from capture
-                if !self.capture_screen.output_file.is_empty() {
-                    self.crack_screen.handshake_path = self.capture_screen.output_file.clone();
+                if !self.scan_capture_screen.output_file.is_empty() {
+                    self.crack_screen.handshake_path = self.scan_capture_screen.output_file.clone();
                 }
                 // Set SSID from captured network
-                if let Some(ref network) = self.capture_screen.target_network {
+                if let Some(ref network) = self.scan_capture_screen.target_network {
                     self.crack_screen.ssid = network.ssid.clone();
                 }
 
@@ -161,11 +137,11 @@ impl BruteforceApp {
                 Task::none()
             }
 
-            // Scan screen
+            // Scan & Capture screen
             Message::StartScan => {
-                self.scan_screen.is_scanning = true;
-                self.scan_screen.error_message = None;
-                self.scan_screen.location_services_warning = false;
+                self.scan_capture_screen.is_scanning = true;
+                self.scan_capture_screen.error_message = None;
+                self.scan_capture_screen.location_services_warning = false;
 
                 let interface = self.interface.clone();
                 Task::perform(
@@ -178,58 +154,54 @@ impl BruteforceApp {
                 )
             }
             Message::StopScan => {
-                self.scan_screen.is_scanning = false;
+                self.scan_capture_screen.is_scanning = false;
                 Task::none()
             }
             Message::ScanComplete(result) => {
-                self.scan_screen.is_scanning = false;
+                self.scan_capture_screen.is_scanning = false;
                 match result {
                     ScanResult::Success(networks) => {
-                        self.scan_screen.networks = networks;
-                        self.scan_screen.selected_network = None;
+                        self.scan_capture_screen.networks = networks;
+                        self.scan_capture_screen.selected_network = None;
                     }
                     ScanResult::PartialSuccess { networks, warning } => {
-                        self.scan_screen.networks = networks;
-                        self.scan_screen.selected_network = None;
-                        self.scan_screen.location_services_warning = true;
-                        self.scan_screen.error_message = Some(warning);
+                        self.scan_capture_screen.networks = networks;
+                        self.scan_capture_screen.selected_network = None;
+                        self.scan_capture_screen.location_services_warning = true;
+                        self.scan_capture_screen.error_message = Some(warning);
                     }
                     ScanResult::Error(msg) => {
-                        self.scan_screen.error_message = Some(msg);
+                        self.scan_capture_screen.error_message = Some(msg);
                     }
                 }
                 Task::none()
             }
             Message::SelectNetwork(idx) => {
-                self.scan_screen.selected_network = Some(idx);
-                Task::none()
-            }
-            Message::DeauthNetwork => {
-                self.scan_screen.error_message = Some(
-                    "Deauth attacks are not supported on macOS. macOS does not allow monitor mode or packet injection on WiFi adapters.".to_string()
-                );
-                Task::none()
-            }
-
-            // Capture screen
-            Message::SelectCaptureNetwork(network) => {
-                self.capture_screen.target_network = Some(network);
+                self.scan_capture_screen.selected_network = Some(idx);
+                // Also set target network for capture
+                if let Some(network) = self.scan_capture_screen.networks.get(idx) {
+                    self.scan_capture_screen.target_network = Some(network.clone());
+                    self.scan_capture_screen.handshake_progress = HandshakeProgress::default();
+                    self.scan_capture_screen.handshake_complete = false;
+                    // Reset bits captured
+                    self.scan_capture_screen.packets_captured = 0;
+                }
                 Task::none()
             }
             Message::StartCapture => {
-                if let Some(ref network) = self.capture_screen.target_network {
+                if let Some(ref network) = self.scan_capture_screen.target_network {
                     // Check if running as root
                     if !self.is_root {
-                        self.capture_screen.error_message = Some(
-                            "Capture requires root privileges. Run with: sudo ./target/release/bruteforce-wifi".to_string()
+                        self.scan_capture_screen.error_message = Some(
+                            "Capture requires root. Run with: sudo ./target/release/bruteforce-wifi".to_string()
                         );
                         return Task::none();
                     }
 
-                    self.capture_screen.is_capturing = true;
-                    self.capture_screen.error_message = None;
-                    self.capture_screen.packets_captured = 0;
-                    self.capture_screen.handshake_progress = HandshakeProgress::default();
+                    self.scan_capture_screen.is_capturing = true;
+                    self.scan_capture_screen.error_message = None;
+                    self.scan_capture_screen.packets_captured = 0;
+                    self.scan_capture_screen.handshake_progress = HandshakeProgress::default();
 
                     let state = Arc::new(CaptureState::new());
                     self.capture_state = Some(state.clone());
@@ -238,11 +210,15 @@ impl BruteforceApp {
                     self.capture_progress_rx = Some(rx);
 
                     // Parse channel from network
-                    let channel = network
-                        .channel
-                        .split(',')
-                        .next()
-                        .and_then(|ch| ch.trim().parse::<u32>().ok());
+                    let channel = network.channel.split(',').next().and_then(|ch| {
+                        // Extract number (handle cases like "36 (5GHz)" or "1")
+                        ch.trim()
+                            .chars()
+                            .take_while(|c| c.is_ascii_digit())
+                            .collect::<String>()
+                            .parse::<u32>()
+                            .ok()
+                    });
 
                     let params = CaptureParams {
                         interface: self.interface.clone(),
@@ -253,7 +229,7 @@ impl BruteforceApp {
                         } else {
                             None
                         },
-                        output_file: self.capture_screen.output_file.clone(),
+                        output_file: self.scan_capture_screen.output_file.clone(),
                     };
 
                     Task::perform(
@@ -261,7 +237,7 @@ impl BruteforceApp {
                         Message::CaptureProgress,
                     )
                 } else {
-                    self.capture_screen.error_message =
+                    self.scan_capture_screen.error_message =
                         Some("No target network selected".to_string());
                     Task::none()
                 }
@@ -270,14 +246,14 @@ impl BruteforceApp {
                 if let Some(ref state) = self.capture_state {
                     state.stop();
                 }
-                self.capture_screen.is_capturing = false;
+                self.scan_capture_screen.is_capturing = false;
                 self.capture_progress_rx = None;
                 Task::none()
             }
             Message::CaptureProgress(progress) => {
                 match progress {
                     workers::CaptureProgress::PacketsCaptured(count) => {
-                        self.capture_screen.packets_captured = count;
+                        self.scan_capture_screen.packets_captured = count;
                     }
                     workers::CaptureProgress::EapolDetected {
                         message_type,
@@ -285,30 +261,30 @@ impl BruteforceApp {
                         client_mac,
                     } => {
                         match message_type {
-                            1 => self.capture_screen.handshake_progress.m1_received = true,
-                            2 => self.capture_screen.handshake_progress.m2_received = true,
-                            3 => self.capture_screen.handshake_progress.m3_received = true,
-                            4 => self.capture_screen.handshake_progress.m4_received = true,
+                            1 => self.scan_capture_screen.handshake_progress.m1_received = true,
+                            2 => self.scan_capture_screen.handshake_progress.m2_received = true,
+                            3 => self.scan_capture_screen.handshake_progress.m3_received = true,
+                            4 => self.scan_capture_screen.handshake_progress.m4_received = true,
                             _ => {}
                         }
-                        self.capture_screen.handshake_progress.last_ap_mac = ap_mac;
-                        self.capture_screen.handshake_progress.last_client_mac = client_mac;
+                        self.scan_capture_screen.handshake_progress.last_ap_mac = ap_mac;
+                        self.scan_capture_screen.handshake_progress.last_client_mac = client_mac;
                     }
                     workers::CaptureProgress::HandshakeComplete { ssid: _ } => {
-                        self.capture_screen.handshake_complete = true;
-                        self.capture_screen.is_capturing = false;
+                        self.scan_capture_screen.handshake_complete = true;
+                        self.scan_capture_screen.is_capturing = false;
                     }
                     workers::CaptureProgress::Error(msg) => {
-                        self.capture_screen.error_message = Some(msg);
-                        self.capture_screen.is_capturing = false;
+                        self.scan_capture_screen.error_message = Some(msg);
+                        self.scan_capture_screen.is_capturing = false;
                     }
                     workers::CaptureProgress::Finished {
                         output_file,
                         packets,
                     } => {
-                        self.capture_screen.output_file = output_file;
-                        self.capture_screen.packets_captured = packets;
-                        self.capture_screen.is_capturing = false;
+                        self.scan_capture_screen.output_file = output_file;
+                        self.scan_capture_screen.packets_captured = packets;
+                        self.scan_capture_screen.is_capturing = false;
                     }
                     _ => {}
                 }
@@ -319,8 +295,8 @@ impl BruteforceApp {
             Message::UseCapturedFileToggled(enabled) => {
                 self.crack_screen.use_captured_file = enabled;
                 if enabled {
-                    // Auto-populate from capture screen
-                    self.crack_screen.handshake_path = self.capture_screen.output_file.clone();
+                    // Auto-populate from scan_capture screen
+                    self.crack_screen.handshake_path = self.scan_capture_screen.output_file.clone();
                 }
                 Task::none()
             }
@@ -410,15 +386,15 @@ impl BruteforceApp {
                     let min_digits = self.crack_screen.min_digits.parse::<usize>().unwrap_or(8);
                     let max_digits = self.crack_screen.max_digits.parse::<usize>().unwrap_or(8);
 
-                    if !(8..=63).contains(&min_digits) {
+                    if !(1..=63).contains(&min_digits) {
                         self.crack_screen.error_message =
-                            Some("Min digits must be between 8 and 63".to_string());
+                            Some("Min digits must be between 1 and 63".to_string());
                         return Task::none();
                     }
 
-                    if !(8..=63).contains(&max_digits) {
+                    if !(1..=63).contains(&max_digits) {
                         self.crack_screen.error_message =
-                            Some("Max digits must be between 8 and 63".to_string());
+                            Some("Max digits must be between 1 and 63".to_string());
                         return Task::none();
                     }
 
@@ -585,24 +561,21 @@ impl BruteforceApp {
             Some(
                 container(
                     row![
-                        text("⚠ ").size(16).color(colors::WARNING),
-                        text("Not running as root - Scan and Capture features require root privileges. Run with: ")
-                            .size(13)
+                        text("ℹ ").size(14).color(colors::TEXT_DIM),
+                        text("Capture requires root. Crack works without permissions.")
+                            .size(12)
                             .color(colors::TEXT_DIM),
-                        text("sudo ./target/release/bruteforce-wifi")
-                            .size(13)
-                            .color(colors::WARNING)
                     ]
                     .align_y(iced::Alignment::Center)
-                    .padding([8, 15]),
+                    .padding([6, 15]),
                 )
                 .width(Length::Fill)
                 .style(|_| container::Style {
                     background: Some(iced::Background::Color(iced::Color::from_rgba(
-                        0.95, 0.77, 0.06, 0.15,
+                        0.5, 0.5, 0.5, 0.1,
                     ))),
                     border: iced::Border {
-                        color: colors::WARNING,
+                        color: colors::TEXT_DIM,
                         width: 1.0,
                         ..Default::default()
                     },
@@ -613,14 +586,12 @@ impl BruteforceApp {
             None
         };
 
-        // Navigation header
+        // Navigation header - simplified to 2 steps
         let nav = container(
             row![
-                nav_button("1. Scan", Screen::Scan, self.screen),
+                nav_button("1. Scan & Capture", Screen::ScanCapture, self.screen),
                 text("→").size(16).color(colors::TEXT_DIM),
-                nav_button("2. Capture", Screen::Capture, self.screen),
-                text("→").size(16).color(colors::TEXT_DIM),
-                nav_button("3. Crack", Screen::Crack, self.screen),
+                nav_button("2. Crack", Screen::Crack, self.screen),
             ]
             .spacing(15)
             .align_y(iced::Alignment::Center)
@@ -634,8 +605,7 @@ impl BruteforceApp {
 
         // Current screen content
         let content = match self.screen {
-            Screen::Scan => self.scan_screen.view(),
-            Screen::Capture => self.capture_screen.view(),
+            Screen::ScanCapture => self.scan_capture_screen.view(),
             Screen::Crack => self.crack_screen.view(),
         };
 
@@ -659,8 +629,7 @@ fn nav_button(label: &str, target: Screen, current: Screen) -> Element<'_, Messa
     };
 
     let msg = match target {
-        Screen::Scan => Message::GoToScan,
-        Screen::Capture => Message::GoToCapture,
+        Screen::ScanCapture => Message::GoToScanCapture,
         Screen::Crack => Message::GoToCrack,
     };
 

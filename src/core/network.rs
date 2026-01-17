@@ -1237,6 +1237,14 @@ fn find_airport_path() -> Option<String> {
 
 /// Helper to run the Embedded Swift scanner
 fn scan_networks_swift() -> Result<Vec<WifiNetwork>> {
+    // Check if swift is available first
+    let swift_check = Command::new("which").arg("swift").output();
+    if swift_check.is_err() || !swift_check.unwrap().status.success() {
+        return Err(anyhow!(
+            "Swift not found. Please install Xcode Command Line Tools: xcode-select --install"
+        ));
+    }
+
     // Simple, non-blocking Swift script that just scans without permission requests
     // Permission requests must be done by the main app binary with proper entitlements
     let script_content = r#"
@@ -1246,7 +1254,7 @@ import Foundation
 // Get WiFi interface
 let client = CWWiFiClient.shared()
 guard let interface = client.interface() else {
-    print("{\"error\": \"no_interface\"}")
+    print("{\"error\": \"no_wifi_interface\", \"message\": \"No WiFi interface found. Make sure WiFi is enabled.\"}")
     exit(0)
 }
 
@@ -1278,7 +1286,15 @@ do {
         print(jsonString)
     }
 } catch let error {
-    print("{\"error\": \"\(error.localizedDescription)\"}")
+    let nsError = error as NSError
+    // Provide more specific error messages
+    if nsError.code == -3931 {
+        print("{\"error\": \"location_services\", \"message\": \"Location Services required. Enable in System Settings > Privacy & Security > Location Services.\"}")
+    } else if nsError.code == -3930 {
+        print("{\"error\": \"wifi_disabled\", \"message\": \"WiFi is disabled. Please enable WiFi and try again.\"}")
+    } else {
+        print("{\"error\": \"scan_failed\", \"message\": \"\(error.localizedDescription)\"}")
+    }
 }
 "#;
 
@@ -1289,7 +1305,7 @@ do {
         return Err(anyhow!("Failed to write Swift script: {}", e));
     }
 
-    // Execute swift script with timeout
+    // Execute swift script with timeout (30 seconds max)
     let output = Command::new("swift")
         .arg(script_path)
         .output()
@@ -1298,6 +1314,19 @@ do {
     // Parse stdout even if exit status is non-zero (script might print error JSON)
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Check for compilation errors
+    if !output.status.success() && stdout.trim().is_empty() {
+        if stderr.contains("no such module") {
+            return Err(anyhow!(
+                "CoreWLAN framework not available. This tool only works on macOS."
+            ));
+        }
+        if !stderr.is_empty() {
+            return Err(anyhow!("Swift compilation error: {}", stderr.trim()));
+        }
+        return Err(anyhow!("Swift scanner failed with unknown error"));
+    }
 
     // Check for empty output
     if stdout.trim().is_empty() {
@@ -1312,6 +1341,7 @@ do {
     struct SwiftResponse {
         networks: Option<Vec<SwiftNetwork>>,
         error: Option<String>,
+        message: Option<String>,
     }
 
     #[derive(Deserialize)]
@@ -1323,12 +1353,18 @@ do {
         security: String,
     }
 
-    let response: SwiftResponse = serde_json::from_str(&stdout)
-        .map_err(|e| anyhow!("Failed to parse Swift scanner output: {} (output: {})", e, stdout))?;
+    let response: SwiftResponse = serde_json::from_str(&stdout).map_err(|e| {
+        anyhow!(
+            "Failed to parse Swift scanner output: {} (output: {})",
+            e,
+            stdout
+        )
+    })?;
 
-    // Check for error
+    // Check for error with detailed message
     if let Some(error) = response.error {
-        return Err(anyhow!("WiFi scan failed: {}", error));
+        let message = response.message.unwrap_or_else(|| error.clone());
+        return Err(anyhow!("{}", message));
     }
 
     // Extract networks

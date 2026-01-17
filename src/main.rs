@@ -111,7 +111,8 @@ fn setup_panic_handler() {
         eprintln!("=================");
 
         if let Some(location) = panic_info.location() {
-            eprintln!("Location: {}:{}:{}",
+            eprintln!(
+                "Location: {}:{}:{}",
                 location.file(),
                 location.line(),
                 location.column()
@@ -143,22 +144,43 @@ fn main() -> iced::Result {
     eprintln!("\nWiFi Bruteforce Tool v{}", env!("CARGO_PKG_VERSION"));
     eprintln!("================================\n");
 
-    // Check location services (macOS)
+    // Check location services (macOS) - this is more important than root for scanning
     let _has_location = check_and_request_location_permission();
 
-    if !is_root {
-        eprintln!("WARNING: Not running with administrator privileges!");
-        eprintln!("Some features require admin/root privileges:");
-        eprintln!("  - Network scanning (may have limited results)");
-        eprintln!("  - Packet capture (will not work)");
+    // macOS-specific guidance
+    #[cfg(target_os = "macos")]
+    {
+        eprintln!("macOS Permission Guide:");
+        eprintln!("------------------------");
+        eprintln!("  Scanning: Requires Location Services (NOT root)");
+        eprintln!("            Enable in: System Settings > Privacy > Location Services");
         eprintln!();
-        eprintln!("To run with admin privileges:");
-        eprintln!("  sudo ./target/release/bruteforce-wifi");
+        eprintln!("  Capture:  Requires root (sudo) for monitor mode");
+        eprintln!("            Note: Apple Silicon Macs have limited capture support");
         eprintln!();
-        eprintln!("Note: Crack mode works without admin privileges.");
+        eprintln!("  Crack:    Works without any special permissions");
         eprintln!("================================\n");
-    } else {
-        eprintln!("Running with administrator privileges.\n");
+
+        if is_root {
+            eprintln!("Running as root. Capture mode is available.\n");
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        if !is_root {
+            eprintln!("WARNING: Not running with administrator privileges!");
+            eprintln!("  - Network scanning may have limited results");
+            eprintln!("  - Packet capture will not work");
+            eprintln!();
+            eprintln!("To run with admin privileges:");
+            eprintln!("  sudo ./target/release/bruteforce-wifi");
+            eprintln!();
+            eprintln!("Note: Crack mode works without admin privileges.");
+            eprintln!("================================\n");
+        } else {
+            eprintln!("Running with administrator privileges.\n");
+        }
     }
 
     // Run the GUI application

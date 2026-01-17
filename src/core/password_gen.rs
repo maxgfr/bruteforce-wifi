@@ -25,12 +25,11 @@ impl ParallelPasswordGenerator {
         let start = 0; // Always start at 0 (e.g., 00000000)
         let end = 10u64.pow(length as u32); // Full range: 10^length
 
-        // Optimal batch size: balance between parallelism and overhead
-        // Larger batches reduce overhead and improve cache locality
-        // For maximum performance, use 10000-50000 passwords per batch
-        let batch_size = 50000.min((end - start) as usize / threads);
+        // Optimal batch size: larger batches reduce overhead
+        // Use 100k passwords per batch for better cache locality
+        let batch_size = 100_000.min((end - start) as usize / threads);
         // Ensure at least some batch size
-        let batch_size = batch_size.max(1000);
+        let batch_size = batch_size.max(10_000);
 
         Self {
             start,
@@ -41,6 +40,7 @@ impl ParallelPasswordGenerator {
     }
 
     /// Get total number of combinations
+    #[inline]
     pub fn total_combinations(&self) -> u64 {
         self.end - self.start
     }
@@ -49,6 +49,7 @@ impl ParallelPasswordGenerator {
     ///
     /// Returns an iterator of password batches that can be processed in parallel.
     /// Optimized for minimal allocations and maximum throughput.
+    #[inline]
     pub fn batches(&self) -> impl Iterator<Item = Vec<String>> + '_ {
         (self.start..self.end)
             .step_by(self.batch_size)
@@ -58,30 +59,36 @@ impl ParallelPasswordGenerator {
                 let mut batch = Vec::with_capacity(batch_capacity);
 
                 for num in batch_start..batch_end {
-                    // Pre-allocate string with exact capacity
-                    let mut s = String::with_capacity(self.length);
-                    let mut n = num;
-                    let mut buf = [0u8; 20]; // Max digits for u64 is 20
-                    let mut pos = self.length;
-
-                    // Build string from right to left
-                    while pos > 0 {
-                        pos -= 1;
-                        buf[pos] = (n % 10) as u8 + b'0';
-                        n /= 10;
-                    }
-
-                    // Convert to UTF-8 string (safe since we only used digits)
-                    unsafe {
-                        s.as_mut_vec().extend_from_slice(&buf[..self.length]);
-                    }
-
-                    batch.push(s);
+                    batch.push(format_numeric_password(num, self.length));
                 }
 
                 batch
             })
     }
+}
+
+/// Format a number as a zero-padded password string
+#[inline(always)]
+fn format_numeric_password(num: u64, length: usize) -> String {
+    // Pre-allocate string with exact capacity
+    let mut s = String::with_capacity(length);
+    let mut n = num;
+    let mut buf = [b'0'; 20]; // Max digits for u64 is 20, init with '0'
+    let mut pos = length;
+
+    // Build string from right to left
+    while pos > 0 {
+        pos -= 1;
+        buf[pos] = (n % 10) as u8 + b'0';
+        n /= 10;
+    }
+
+    // Convert to UTF-8 string (safe since we only used digits)
+    unsafe {
+        s.as_mut_vec().extend_from_slice(&buf[..length]);
+    }
+
+    s
 }
 
 #[cfg(test)]
@@ -91,7 +98,7 @@ mod tests {
     #[test]
     fn test_generator_basic() {
         let gen = ParallelPasswordGenerator::new(2, 4);
-        assert_eq!(gen.total_combinations(), 90); // 10 to 99
+        assert_eq!(gen.total_combinations(), 100); // 00 to 99
         assert_eq!(gen.length, 2);
     }
 
@@ -102,8 +109,8 @@ mod tests {
 
         assert!(!batches.is_empty());
 
-        // First batch should start with "10"
-        assert_eq!(batches[0][0], "10");
+        // First batch should start with "00"
+        assert_eq!(batches[0][0], "00");
     }
 
     #[test]
@@ -111,8 +118,8 @@ mod tests {
         let gen = ParallelPasswordGenerator::new(3, 4);
         let first_batch = gen.batches().next().unwrap();
 
-        assert_eq!(first_batch[0], "100");
-        assert_eq!(first_batch[1], "101");
-        assert_eq!(first_batch[2], "102");
+        assert_eq!(first_batch[0], "000");
+        assert_eq!(first_batch[1], "001");
+        assert_eq!(first_batch[2], "002");
     }
 }
