@@ -214,8 +214,7 @@ impl BruteforceApp {
                         // Try to find the first sequence of digits
                         // This handles "36 (5GHz)", "Channel 6", "1", etc.
                         ch.split(|c: char| !c.is_ascii_digit())
-                            .filter(|s| !s.is_empty())
-                            .next()
+                            .find(|s| !s.is_empty())
                             .and_then(|s| s.parse::<u32>().ok())
                     });
 

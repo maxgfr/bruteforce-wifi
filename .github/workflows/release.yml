@@ -92,38 +92,47 @@ jobs:
           cp "target/${TARGET}/release/bruteforce-wifi" "${APP_DIR}/Contents/MacOS/${APP_NAME}_bin"
           chmod +x "${APP_DIR}/Contents/MacOS/${APP_NAME}_bin"
 
-          # Create a launcher script that requests root privileges
-          cat > "${APP_DIR}/Contents/MacOS/${APP_NAME}" << LAUNCHER_EOF
-          #!/bin/bash
-          # Launcher script that requests root privileges
+          # Create a C wrapper that requests root privileges
+          # This is used instead of a shell script so correct signing works
+          cat > wrapper.c << EOF
+          #include <unistd.h>
+          #include <stdio.h>
+          #include <stdlib.h>
+          #include <string.h>
+          #include <libgen.h>
+          #include <mach-o/dyld.h>
 
-          # Get the directory where this script is located
-          SCRIPT_DIR="\$( cd "\$( dirname "\${BASH_SOURCE[0]}" )" && pwd )"
-          BINARY="\${SCRIPT_DIR}/${APP_NAME}_bin"
+          int main(int argc, char *argv[]) {
+              char exe_path[1024];
+              uint32_t size = sizeof(exe_path);
+              if (_NSGetExecutablePath(exe_path, &size) != 0) {
+                  return 1;
+              }
+              
+              char *dir = dirname(exe_path);
+              char binary_path[1024];
+              snprintf(binary_path, sizeof(binary_path), "%s/${APP_NAME}_bin", dir);
+              
+              if (geteuid() != 0) {
+                  char **new_argv = malloc((argc + 3) * sizeof(char*));
+                  new_argv[0] = "sudo";
+                  new_argv[1] = binary_path;
+                  for (int i = 1; i < argc; i++) {
+                      new_argv[i + 1] = argv[i];
+                  }
+                  new_argv[argc + 1] = NULL;
+                  
+                  execvp("sudo", new_argv);
+              } else {
+                  execv(binary_path, argv);
+              }
+              return 1;
+          }
+          EOF
 
-          # Get the app bundle path (parent of Contents)
-          APP_PATH="\$(dirname "\$(dirname "\${SCRIPT_DIR}")")"
-
-          # Remove quarantine attributes if present (needed for unsigned apps)
-          if [ "\$EUID" -eq 0 ]; then
-              # Running as root, remove quarantine attributes
-              xattr -cr "\${APP_PATH}" 2>/dev/null || true
-          fi
-
-          # Check if running as root
-          if [ "\$EUID" -ne 0 ]; then
-              # Not running as root, re-launch with sudo
-              echo "This application requires root privileges to perform WiFi network operations."
-              sudo "\$BINARY" "\$@"
-              exit \$?
-          else
-              # Already running as root
-              exec "\$BINARY" "\$@"
-          fi
-          LAUNCHER_EOF
-
-          # Make the launcher executable
-          chmod +x "${APP_DIR}/Contents/MacOS/${APP_NAME}"
+          # Compile the wrapper
+          cc -o "${APP_DIR}/Contents/MacOS/${APP_NAME}" wrapper.c
+          rm wrapper.c
 
           # Create Info.plist
           cat > "${APP_DIR}/Contents/Info.plist" << EOF
