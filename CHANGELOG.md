@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.1](https://github.com/maxgfr/bruteforce-wifi/compare/v1.3.0...v1.3.1) (2026-01-17)
+
+
+### ♻️ Code Refactoring
+
+* **ui,core,ci:** unify scan and capture screens with performance improvements ([a6d4221](https://github.com/maxgfr/bruteforce-wifi/commit/a6d4221375efdbd3a345c748a0317ba0766a9b8f))
+
 ## [1.3.0](https://github.com/maxgfr/bruteforce-wifi/compare/v1.2.0...v1.3.0) (2026-01-17)
 
 
