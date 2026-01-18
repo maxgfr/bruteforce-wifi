@@ -71,14 +71,14 @@ cat > "$CONTENTS_DIR/Info.plist" << EOF
     
     <!-- Location Services Permission -->
     <key>NSLocationWhenInUseUsageDescription</key>
-    <string>WiFi Bruteforce needs access to Location Services to scan and display WiFi network BSSIDs (MAC addresses). This is required by macOS to access WiFi details.</string>
+    <string>BrutiFi needs access to Location Services to scan and display WiFi network BSSIDs (MAC addresses). This is required by macOS to access WiFi details.</string>
     
     <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-    <string>WiFi Bruteforce needs access to Location Services to scan WiFi networks and capture handshakes. This is a system requirement for accessing WiFi information.</string>
+    <string>BrutiFi needs access to Location Services to scan WiFi networks and capture handshakes. This is a system requirement for accessing WiFi information.</string>
     
     <!-- Network -->
     <key>NSLocalNetworkUsageDescription</key>
-    <string>WiFi Bruteforce needs network access to scan WiFi networks and capture packets.</string>
+    <string>BrutiFi needs network access to scan WiFi networks and capture packets.</string>
     
     <!-- App Category -->
     <key>LSApplicationCategoryType</key>

@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
-use brutifi::{parse_cap_file, scan_networks, OfflineBruteForcer, WifiNetwork};
+use brutifi::{scan_networks, WifiNetwork};
 
 /// Scan result from background worker
 #[derive(Debug, Clone)]
@@ -24,25 +24,12 @@ pub enum ScanResult {
 
 /// Capture progress from background worker
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub enum CaptureProgress {
     Started,
     Log(String),
-    PacketsCaptured(u64),
-    EapolDetected {
-        message_type: u8,
-        ap_mac: String,
-        client_mac: String,
-    },
-    HandshakeComplete {
-        ssid: String,
-    },
+    HandshakeComplete { ssid: String },
     Error(String),
-    Finished {
-        output_file: String,
-        packets: u64,
-    },
-    Stopped,
+    Finished { output_file: String, packets: u64 },
 }
 
 /// Crack progress from background worker
@@ -57,13 +44,11 @@ pub enum CrackProgress {
 }
 
 /// Capture state for controlling the capture process
-#[allow(dead_code)]
 pub struct CaptureState {
     pub running: Arc<AtomicBool>,
     pub packets_count: Arc<AtomicU64>,
 }
 
-#[allow(dead_code)]
 impl CaptureState {
     pub fn new() -> Self {
         Self {
@@ -81,8 +66,6 @@ impl CaptureState {
 pub struct CrackState {
     pub running: Arc<AtomicBool>,
     pub attempts: Arc<AtomicU64>,
-    #[allow(dead_code)]
-    pub found: Arc<AtomicBool>,
 }
 
 impl CrackState {
@@ -90,7 +73,6 @@ impl CrackState {
         Self {
             running: Arc::new(AtomicBool::new(true)),
             attempts: Arc::new(AtomicU64::new(0)),
-            found: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -298,314 +280,6 @@ pub async fn capture_async(
             CaptureProgress::Error(error_msg)
         }
     }
-}
-
-/// Run wordlist crack in background with progress updates
-/// Note: This function is kept for reference but crack_wordlist_optimized is preferred
-#[allow(dead_code)]
-pub async fn crack_wordlist_async(
-    params: WordlistCrackParams,
-    state: Arc<CrackState>,
-    progress_tx: tokio::sync::mpsc::UnboundedSender<CrackProgress>,
-) -> CrackProgress {
-    use std::fs::File;
-    use std::io::{BufRead, BufReader};
-
-    // Load handshake with panic protection
-    let _ = progress_tx.send(CrackProgress::Log("Loading handshake...".to_string()));
-    let handshake = match std::panic::catch_unwind(|| {
-        parse_cap_file(&params.handshake_path, params.ssid.as_deref())
-    }) {
-        Ok(Ok(h)) => {
-            let _ = progress_tx.send(CrackProgress::Log(format!(
-                "Handshake loaded: SSID={}",
-                h.ssid
-            )));
-            h
-        }
-        Ok(Err(e)) => return CrackProgress::Error(format!("Failed to parse handshake: {}", e)),
-        Err(panic_err) => {
-            return CrackProgress::Error(format!(
-                "Panic while parsing handshake: {:?}",
-                panic_err
-                    .downcast_ref::<String>()
-                    .map(|s| s.as_str())
-                    .or_else(|| panic_err.downcast_ref::<&str>().copied())
-                    .unwrap_or("Unknown panic")
-            ))
-        }
-    };
-
-    // Load wordlist
-    let _ = progress_tx.send(CrackProgress::Log(format!(
-        "Loading wordlist from {}...",
-        params.wordlist_path.display()
-    )));
-    let file = match File::open(&params.wordlist_path) {
-        Ok(f) => f,
-        Err(e) => return CrackProgress::Error(format!("Failed to open wordlist: {}", e)),
-    };
-
-    let reader = BufReader::new(file);
-    let passwords: Vec<String> = reader
-        .lines()
-        .map_while(Result::ok)
-        .filter(|line| !line.trim().is_empty())
-        .filter(|line| line.len() >= 8 && line.len() <= 63)
-        .map(|line| line.trim().to_string())
-        .collect();
-
-    if passwords.is_empty() {
-        return CrackProgress::Error("No valid passwords in wordlist".to_string());
-    }
-
-    let total = passwords.len() as u64;
-    let _ = progress_tx.send(CrackProgress::Log(format!("Loaded {} passwords", total)));
-    let _ = progress_tx.send(CrackProgress::Started { total });
-
-    // Create bruteforcer
-    let forcer = match OfflineBruteForcer::new(handshake, params.threads) {
-        Ok(f) => f,
-        Err(e) => return CrackProgress::Error(e.to_string()),
-    };
-
-    let _ = progress_tx.send(CrackProgress::Log(format!(
-        "Starting crack with {} threads...",
-        params.threads
-    )));
-
-    // Run crack with progress updates
-    let start = std::time::Instant::now();
-    // Larger chunks reduce overhead and improve cache locality
-    let chunk_size = (passwords.len() / (params.threads * 4)).clamp(500, 50000);
-
-    use rayon::prelude::*;
-    let found_password: Arc<parking_lot::Mutex<Option<String>>> =
-        Arc::new(parking_lot::Mutex::new(None));
-    let found_flag = Arc::new(AtomicBool::new(false));
-
-    let found_password_clone = Arc::clone(&found_password);
-    let _result = passwords.par_chunks(chunk_size).find_any(|chunk| {
-        if found_flag.load(Ordering::Acquire) || !state.running.load(Ordering::Relaxed) {
-            return false;
-        }
-
-        for password in chunk.iter() {
-            // Check for found flag with Acquire ordering to ensure we see the latest value
-            if found_flag.load(Ordering::Acquire) || !state.running.load(Ordering::Relaxed) {
-                return false;
-            }
-
-            let current = state.attempts.fetch_add(1, Ordering::Relaxed);
-
-            // Send progress every 5000 attempts (reduced from 1000 to improve performance)
-            if current.is_multiple_of(5000) {
-                let elapsed = start.elapsed().as_secs_f64();
-                let rate = if elapsed > 0.0 {
-                    current as f64 / elapsed
-                } else {
-                    0.0
-                };
-                let _ = progress_tx.send(CrackProgress::Progress {
-                    current,
-                    total,
-                    rate,
-                });
-            }
-
-            if brutifi::verify_password(
-                password,
-                &forcer.handshake.ssid,
-                &forcer.handshake.ap_mac,
-                &forcer.handshake.client_mac,
-                &forcer.handshake.anonce,
-                &forcer.handshake.snonce,
-                &forcer.handshake.eapol_frame,
-                &forcer.handshake.mic,
-                forcer.handshake.key_version,
-            ) {
-                // Store the found password BEFORE setting the flag
-                *found_password_clone.lock() = Some(password.to_string());
-                // Use Release ordering to ensure password is visible before flag
-                found_flag.store(true, Ordering::Release);
-                return true;
-            }
-        }
-        false
-    });
-
-    // Check if password was found or stopped
-    if found_flag.load(Ordering::Acquire) {
-        let result = found_password.lock().clone();
-        if let Some(password) = result {
-            let _ = progress_tx.send(CrackProgress::Log(format!("Password found: {}", password)));
-            return CrackProgress::Found(password);
-        }
-    }
-
-    if !state.running.load(Ordering::Relaxed) {
-        return CrackProgress::Error("Stopped by user".to_string());
-    }
-
-    let _ = progress_tx.send(CrackProgress::Log(
-        "Password not found in wordlist".to_string(),
-    ));
-    CrackProgress::NotFound
-}
-
-/// Run numeric crack in background with progress updates
-/// Note: This function is kept for reference but crack_numeric_optimized is preferred
-#[allow(dead_code)]
-pub async fn crack_numeric_async(
-    params: NumericCrackParams,
-    state: Arc<CrackState>,
-    progress_tx: tokio::sync::mpsc::UnboundedSender<CrackProgress>,
-) -> CrackProgress {
-    use brutifi::password_gen::ParallelPasswordGenerator;
-    use rayon::prelude::*;
-
-    // Load handshake with panic protection
-    let _ = progress_tx.send(CrackProgress::Log("Loading handshake...".to_string()));
-    let handshake = match std::panic::catch_unwind(|| {
-        parse_cap_file(&params.handshake_path, params.ssid.as_deref())
-    }) {
-        Ok(Ok(h)) => {
-            let _ = progress_tx.send(CrackProgress::Log(format!(
-                "Handshake loaded: SSID={}",
-                h.ssid
-            )));
-            h
-        }
-        Ok(Err(e)) => return CrackProgress::Error(format!("Failed to parse handshake: {}", e)),
-        Err(panic_err) => {
-            return CrackProgress::Error(format!(
-                "Panic while parsing handshake: {:?}",
-                panic_err
-                    .downcast_ref::<String>()
-                    .map(|s| s.as_str())
-                    .or_else(|| panic_err.downcast_ref::<&str>().copied())
-                    .unwrap_or("Unknown panic")
-            ))
-        }
-    };
-
-    // Calculate total
-    let mut total: u64 = 0;
-    for len in params.min_digits..=params.max_digits {
-        total += 10u64.pow(len as u32);
-    }
-
-    let _ = progress_tx.send(CrackProgress::Log(format!(
-        "Testing {} combinations ({}-{} digits)",
-        total, params.min_digits, params.max_digits
-    )));
-    let _ = progress_tx.send(CrackProgress::Started { total });
-
-    let _ = progress_tx.send(CrackProgress::Log(format!(
-        "Starting crack with {} threads...",
-        params.threads
-    )));
-
-    // Run crack with progress updates
-    let start = std::time::Instant::now();
-    let found_password: Arc<parking_lot::Mutex<Option<String>>> =
-        Arc::new(parking_lot::Mutex::new(None));
-    let found_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
-
-    // Process each length
-    for length in params.min_digits..=params.max_digits {
-        if found_flag.load(std::sync::atomic::Ordering::Acquire)
-            || !state.running.load(std::sync::atomic::Ordering::Relaxed)
-        {
-            break;
-        }
-
-        let generator = ParallelPasswordGenerator::new(length, params.threads);
-
-        // Process batches in parallel
-        for batch in generator.batches() {
-            if found_flag.load(std::sync::atomic::Ordering::Acquire)
-                || !state.running.load(std::sync::atomic::Ordering::Relaxed)
-            {
-                break;
-            }
-
-            let found_ref = Arc::clone(&found_flag);
-            let found_password_ref = Arc::clone(&found_password);
-            let state_ref = Arc::clone(&state);
-
-            // Parallel password testing
-            let _result = batch.par_iter().find_any(|password| {
-                // Check for found flag with Acquire ordering to ensure we see the latest value
-                if found_ref.load(std::sync::atomic::Ordering::Acquire)
-                    || !state_ref.running.load(std::sync::atomic::Ordering::Relaxed)
-                {
-                    return false;
-                }
-
-                let current = state_ref
-                    .attempts
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
-                // Send progress every 5000 attempts (reduced from 1000 to improve performance)
-                if current.is_multiple_of(5000) {
-                    let elapsed = start.elapsed().as_secs_f64();
-                    let rate = if elapsed > 0.0 {
-                        current as f64 / elapsed
-                    } else {
-                        0.0
-                    };
-                    let _ = progress_tx.send(CrackProgress::Progress {
-                        current,
-                        total,
-                        rate,
-                    });
-                }
-
-                if brutifi::verify_password(
-                    password,
-                    &handshake.ssid,
-                    &handshake.ap_mac,
-                    &handshake.client_mac,
-                    &handshake.anonce,
-                    &handshake.snonce,
-                    &handshake.eapol_frame,
-                    &handshake.mic,
-                    handshake.key_version,
-                ) {
-                    // Store the found password BEFORE setting the flag
-                    *found_password_ref.lock() = Some(password.to_string());
-                    // Use Release ordering to ensure password is visible before flag
-                    found_ref.store(true, std::sync::atomic::Ordering::Release);
-                    return true;
-                }
-
-                false
-            });
-
-            if found_flag.load(std::sync::atomic::Ordering::Acquire) {
-                break;
-            }
-        }
-    }
-
-    // Check if password was found or stopped
-    if found_flag.load(std::sync::atomic::Ordering::Acquire) {
-        let result = found_password.lock().clone();
-        if let Some(password) = result {
-            let _ = progress_tx.send(CrackProgress::Log(format!("Password found: {}", password)));
-            return CrackProgress::Found(password);
-        }
-    }
-
-    if !state.running.load(std::sync::atomic::Ordering::Relaxed) {
-        return CrackProgress::Error("Stopped by user".to_string());
-    }
-
-    let _ = progress_tx.send(CrackProgress::Log(
-        "Password not found in range".to_string(),
-    ));
-    CrackProgress::NotFound
 }
 
 /// Hashcat crack worker parameters

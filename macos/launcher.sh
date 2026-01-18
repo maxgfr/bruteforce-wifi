@@ -1,12 +1,12 @@
 #!/bin/bash
 #
-# WiFi Bruteforce Launcher
+# BrutiFi Launcher
 # Automatically requests sudo privileges if needed
 #
 
-APP_NAME="WiFi Bruteforce"
+APP_NAME="BrutiFi"
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-BINARY="$SCRIPT_DIR/bruteforce-wifi"
+BINARY="$SCRIPT_DIR/brutifi"
 
 # Check if binary exists
 if [ ! -f "$BINARY" ]; then
@@ -24,7 +24,7 @@ else
     osascript <<EOF 2>/dev/null
 tell application "System Events"
     activate
-    set dialogResult to display dialog "WiFi Bruteforce requires administrator privileges to capture WiFi packets.\\n\\nYou will be prompted for your password." with title "$APP_NAME" buttons {"Cancel", "Continue"} default button "Continue" with icon caution
+    set dialogResult to display dialog "BrutiFi requires administrator privileges to capture WiFi packets.\\n\\nYou will be prompted for your password." with title "$APP_NAME" buttons {"Cancel", "Continue"} default button "Continue" with icon caution
     if button returned of dialogResult is "Continue" then
         try
             do shell script "cd '$SCRIPT_DIR' && exec '$BINARY'" with administrator privileges

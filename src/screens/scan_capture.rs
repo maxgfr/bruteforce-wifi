@@ -19,10 +19,6 @@ use brutifi::WifiNetwork;
 pub struct HandshakeProgress {
     pub m1_received: bool,
     pub m2_received: bool,
-    pub m3_received: bool,
-    pub m4_received: bool,
-    pub last_ap_mac: String,
-    pub last_client_mac: String,
 }
 
 impl HandshakeProgress {
