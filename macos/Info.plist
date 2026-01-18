@@ -5,13 +5,13 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
     <key>CFBundleExecutable</key>
-    <string>bruteforce-wifi</string>
+    <string>brutyfi</string>
     <key>CFBundleIdentifier</key>
-    <string>com.maxgfr.bruteforce-wifi</string>
+    <string>com.maxgfr.brutyfi</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>WiFi Bruteforce</string>
+    <string>BrutyFi</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -25,7 +25,7 @@
     
     <!-- Location Services Permission -->
     <key>NSLocationWhenInUseUsageDescription</key>
-    <string>WiFi Bruteforce needs access to Location Services to scan and display WiFi network BSSIDs (MAC addresses). This is required by macOS to access WiFi details.</string>
+    <string>BrutyFi needs access to Location Services to scan and display WiFi network BSSIDs (MAC addresses). This is required by macOS to access WiFi details.</string>
     
     <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
     <string>WiFi Bruteforce needs access to Location Services to scan WiFi networks and capture handshakes. This is a system requirement for accessing WiFi information.</string>

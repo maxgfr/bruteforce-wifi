@@ -1,6 +1,6 @@
-# WiFi Bruteforce Tool 🔐
+# BrutyFi 🔐
 
-> Modern desktop application for WPA/WPA2 security testing with real-time feedback
+> Cute and powerful desktop app for WPA/WPA2 security testing with real-time feedback
 
 [![Release](https://github.com/maxgfr/bruteforce-wifi/actions/workflows/release.yml/badge.svg)](https://github.com/maxgfr/bruteforce-wifi/releases)
 [![CI](https://github.com/maxgfr/bruteforce-wifi/actions/workflows/ci.yml/badge.svg)](https://github.com/maxgfr/bruteforce-wifi/actions)

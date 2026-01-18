@@ -213,7 +213,8 @@ impl BruteforceApp {
                     // Check if running as root
                     if !self.is_root {
                         self.scan_capture_screen.error_message = Some(
-                            "Capture requires root. Run with: sudo ./target/release/bruteforce-wifi".to_string()
+                            "Capture requires root. In development mode, run with: sudo ./target/release/brutyfi"
+                                .to_string(),
                         );
                         return Task::none();
                     }
@@ -308,22 +309,28 @@ impl BruteforceApp {
                         ap_mac,
                         client_mac,
                     } => {
-                        let msg = format!("EAPOL M{}: {} → {}", message_type, 
-                            &ap_mac[..17], &client_mac[..17]);
+                        let msg = format!(
+                            "EAPOL M{}: {} → {}",
+                            message_type,
+                            &ap_mac[..17],
+                            &client_mac[..17]
+                        );
                         self.scan_capture_screen.log_messages.push(msg);
-                        
+
                         match message_type {
                             1 => {
                                 self.scan_capture_screen.handshake_progress.m1_received = true;
-                            },
+                            }
                             2 => {
                                 self.scan_capture_screen.handshake_progress.m2_received = true;
                                 // Check if we have M1+M2 (complete handshake)
                                 if self.scan_capture_screen.handshake_progress.m1_received {
                                     self.scan_capture_screen.handshake_complete = true;
-                                    self.scan_capture_screen.log_messages.push("✅ Handshake complete!".to_string());
+                                    self.scan_capture_screen
+                                        .log_messages
+                                        .push("✅ Handshake complete!".to_string());
                                 }
-                            },
+                            }
                             3 => self.scan_capture_screen.handshake_progress.m3_received = true,
                             4 => self.scan_capture_screen.handshake_progress.m4_received = true,
                             _ => {}
@@ -334,12 +341,16 @@ impl BruteforceApp {
                     workers::CaptureProgress::HandshakeComplete { ssid } => {
                         self.scan_capture_screen.handshake_complete = true;
                         self.scan_capture_screen.is_capturing = false;
-                        self.scan_capture_screen.log_messages.push(format!("✅ Handshake captured for '{}'", ssid));
+                        self.scan_capture_screen
+                            .log_messages
+                            .push(format!("✅ Handshake captured for '{}'", ssid));
                     }
                     workers::CaptureProgress::Error(msg) => {
                         self.scan_capture_screen.error_message = Some(msg.clone());
                         self.scan_capture_screen.is_capturing = false;
-                        self.scan_capture_screen.log_messages.push(format!("❌ Error: {}", msg));
+                        self.scan_capture_screen
+                            .log_messages
+                            .push(format!("❌ Error: {}", msg));
                     }
                     workers::CaptureProgress::Finished {
                         output_file,

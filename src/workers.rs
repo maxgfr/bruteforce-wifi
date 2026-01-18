@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
-use bruteforce_wifi::{parse_cap_file, scan_networks, OfflineBruteForcer, WifiNetwork};
+use brutyfi::{parse_cap_file, scan_networks, OfflineBruteForcer, WifiNetwork};
 
 /// Scan result from background worker
 #[derive(Debug, Clone)]
@@ -124,7 +124,7 @@ pub fn scan_networks_async(interface: String) -> ScanResult {
                 ScanResult::Error("No networks found".to_string())
             } else {
                 // Compact duplicate networks (same SSID, different channels/BSSIDs)
-                let compacted_networks = bruteforce_wifi::compact_duplicate_networks(networks);
+                let compacted_networks = brutyfi::compact_duplicate_networks(networks);
 
                 // Check if BSSIDs are missing (Location Services issue)
                 let has_bssids = compacted_networks.iter().any(|n| !n.bssid.is_empty());
@@ -157,7 +157,7 @@ pub async fn capture_async(
     state: Arc<CaptureState>,
     progress_tx: tokio::sync::mpsc::UnboundedSender<CaptureProgress>,
 ) -> CaptureProgress {
-    use bruteforce_wifi::CaptureOptions;
+    use brutyfi::CaptureOptions;
 
     let _ = progress_tx.send(CaptureProgress::Started);
     let _ = progress_tx.send(CaptureProgress::Log(
@@ -239,14 +239,14 @@ pub async fn capture_async(
         };
 
         // Try to capture, with better error messages
-        match bruteforce_wifi::capture_traffic(options) {
+        match brutyfi::capture_traffic(options) {
             Ok(captured_ssid) => Ok(captured_ssid),
             Err(e) => {
                 let error_str = e.to_string();
                 // Provide more helpful error messages
                 if error_str.contains("permission denied") || error_str.contains("Operation not permitted") {
                     Err(anyhow::anyhow!(
-                        "Permission denied. Make sure to run with sudo: sudo ./target/release/bruteforce-wifi"
+                        "Permission denied. Make sure to run with sudo: sudo ./target/release/brutyfi"
                     ))
                 } else if error_str.contains("monitor mode") || error_str.contains("rfmon") {
                     Err(anyhow::anyhow!(
@@ -413,7 +413,7 @@ pub async fn crack_wordlist_async(
                 });
             }
 
-            if bruteforce_wifi::verify_password(
+            if brutyfi::verify_password(
                 password,
                 &forcer.handshake.ssid,
                 &forcer.handshake.ap_mac,
@@ -461,7 +461,7 @@ pub async fn crack_numeric_async(
     state: Arc<CrackState>,
     progress_tx: tokio::sync::mpsc::UnboundedSender<CrackProgress>,
 ) -> CrackProgress {
-    use bruteforce_wifi::password_gen::ParallelPasswordGenerator;
+    use brutyfi::password_gen::ParallelPasswordGenerator;
     use rayon::prelude::*;
 
     // Load handshake with panic protection
@@ -562,7 +562,7 @@ pub async fn crack_numeric_async(
                     });
                 }
 
-                if bruteforce_wifi::verify_password(
+                if brutyfi::verify_password(
                     password,
                     &handshake.ssid,
                     &handshake.ap_mac,

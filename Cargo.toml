@@ -1,14 +1,14 @@
 [package]
-name = "bruteforce-wifi"
+name = "brutyfi"
 version = "1.5.0"
 edition = "2021"
-description = "Optimized WiFi bruteforce tool with wordlist and numeric combination support"
+description = "Cute and powerful WiFi security testing tool with real-time feedback"
 license = "MIT"
 repository = "https://github.com/maxgfr/bruteforce-wifi"
 authors = ["maxgfr"]
 
 [[bin]]
-name = "bruteforce-wifi"
+name = "brutyfi"
 path = "src/main.rs"
 
 [dependencies]

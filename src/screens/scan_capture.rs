@@ -12,7 +12,7 @@ use iced::{Element, Length};
 
 use crate::app::Message;
 use crate::theme::{self, colors};
-use bruteforce_wifi::WifiNetwork;
+use brutyfi::WifiNetwork;
 
 /// EAPOL message tracking
 #[derive(Debug, Clone, Default)]

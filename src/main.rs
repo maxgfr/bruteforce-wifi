@@ -141,7 +141,7 @@ fn main() -> iced::Result {
     let is_root = is_root();
 
     // Print startup info
-    eprintln!("\nWiFi Bruteforce Tool v{}", env!("CARGO_PKG_VERSION"));
+    eprintln!("\nBrutyFi v{}", env!("CARGO_PKG_VERSION"));
     eprintln!("================================\n");
 
     // Check location services (macOS) - this is more important than root for scanning
@@ -174,7 +174,7 @@ fn main() -> iced::Result {
             eprintln!("  - Packet capture will not work");
             eprintln!();
             eprintln!("To run with admin privileges:");
-            eprintln!("  sudo ./target/release/bruteforce-wifi");
+            eprintln!("  sudo ./target/release/brutyfi");
             eprintln!();
             eprintln!("Note: Crack mode works without admin privileges.");
             eprintln!("================================\n");
@@ -184,13 +184,9 @@ fn main() -> iced::Result {
     }
 
     // Run the GUI application
-    iced::application(
-        "WiFi Bruteforce Tool",
-        BruteforceApp::update,
-        BruteforceApp::view,
-    )
-    .subscription(BruteforceApp::subscription)
-    .theme(BruteforceApp::theme)
-    .window_size(Size::new(900.0, 700.0))
-    .run_with(move || BruteforceApp::new(is_root))
+    iced::application("BrutyFi", BruteforceApp::update, BruteforceApp::view)
+        .subscription(BruteforceApp::subscription)
+        .theme(BruteforceApp::theme)
+        .window_size(Size::new(900.0, 700.0))
+        .run_with(move || BruteforceApp::new(is_root))
 }

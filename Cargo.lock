@@ -413,7 +413,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "bruteforce-wifi"
+name = "brutyfi"
 version = "1.5.0"
 dependencies = [
  "aes",

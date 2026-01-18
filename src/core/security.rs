@@ -97,7 +97,7 @@ fn check_wps(interface: &str, bssid: &str) {
     println!("ℹ️  PMKID Vulnerability:");
     println!("   To check for PMKID, run a capture:");
     println!(
-        "   bruteforce-wifi capture -i {} --bssid {} --duration 10",
+        "   brutyfi capture -i {} --bssid {} --duration 10",
         interface, bssid
     );
 }
