@@ -207,16 +207,7 @@ sudo apt install hashcat hcxtools
 # Download hcxtools from https://github.com/ZerBea/hcxtools
 ```
 
-## 💡 Inspiration
 
-This project was inspired by several groundbreaking tools in the WiFi security space:
-
-- [AirJack](https://github.com/rtulke/AirJack) - As `brutifi` but in a Python-based CLI
-- [Aircrack-ng](https://github.com/aircrack-ng/aircrack-ng) - Industry-standard WiFi
-- [Pyrit](https://github.com/JPaulMora/Pyrit) - Pre-computed tables for WPA-PSK attacks
-- [Cowpatty](https://github.com/joswr1ght/cowpatty) - Early WPA-PSK cracking implementation
-
-These tools demonstrated the feasibility of offline WPA/WPA2 password attacks and inspired the creation of a modern, user-friendly desktop application.
 
 ## 🔐 Security & Legal
 
@@ -241,7 +232,18 @@ This tool is for educational and authorized testing only.
 
 **Unauthorized access to computer networks is a criminal offense** in most jurisdictions (CFAA in USA, Computer Misuse Act in UK, etc.). Always obtain explicit written permission before testing.
 
-## 🙏 Acknowledgments
+## 🙏 Acknowledgments & inspiration
+
+This project was inspired by several groundbreaking tools in the WiFi security space:
+
+- [AirJack](https://github.com/rtulke/AirJack) - As `brutifi` but in a Python-based CLI
+- [Aircrack-ng](https://github.com/aircrack-ng/aircrack-ng) - Industry-standard WiFi
+- [Pyrit](https://github.com/JPaulMora/Pyrit) - Pre-computed tables for WPA-PSK attacks
+- [Cowpatty](https://github.com/joswr1ght/cowpatty) - Early WPA-PSK cracking implementation
+
+These tools demonstrated the feasibility of offline WPA/WPA2 password attacks and inspired the creation of a modern, user-friendly desktop application.
+
+Special thanks to the following libraries and tools:
 
 - [Iced](https://github.com/iced-rs/iced) - Cross-platform GUI framework
 - [Rayon](https://github.com/rayon-rs/rayon) - Data parallelism library
