@@ -136,6 +136,20 @@ pub async fn capture_async(
     let interface = params.interface.clone();
     let ssid = params.ssid.clone();
 
+    if std::path::Path::new(&output_file).exists() {
+        if let Err(e) = std::fs::remove_file(&output_file) {
+            let _ = progress_tx.send(CaptureProgress::Log(format!(
+                "⚠️  Failed to remove existing capture file: {}",
+                e
+            )));
+        } else {
+            let _ = progress_tx.send(CaptureProgress::Log(format!(
+                "🗑️  Removed existing capture file: {}",
+                output_file
+            )));
+        }
+    }
+
     // Pre-flight checks
     let _ = progress_tx.send(CaptureProgress::Log(format!(
         "Checking interface {}...",
@@ -200,7 +214,7 @@ pub async fn capture_async(
             bssid: None,
             output_file: &params.output_file,
             duration: None,  // Run until stopped
-            no_deauth: true, // macOS doesn't support deauth
+            no_deauth: cfg!(target_os = "macos"),
             running: Some(running_clone), // Pass the state for stopping
         };
 

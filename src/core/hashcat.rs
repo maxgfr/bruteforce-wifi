@@ -75,6 +75,27 @@ fn parse_progress_percent(line: &str) -> Option<f64> {
     percent_str.trim().parse::<f64>().ok()
 }
 
+fn parse_progress_counts(line: &str) -> Option<(u64, u64, f64)> {
+    if !line.contains("Progress") {
+        return None;
+    }
+
+    let after = line.split(':').nth(1)?.trim();
+    let counts_part = after.split_whitespace().next()?;
+    let (current_str, total_str) = counts_part.split_once('/')?;
+    let current = current_str.trim().parse::<u64>().ok()?;
+    let total = total_str.trim().parse::<u64>().ok()?;
+
+    let percent = if let Some(start) = after.find('(') {
+        let end = after[start..].find('%')? + start;
+        after[start + 1..end].trim().parse::<f64>().ok()?
+    } else {
+        0.0
+    };
+
+    Some((current, total, percent))
+}
+
 fn parse_keyspace(line: &str) -> Option<u64> {
     if !line.contains("Keyspace") {
         return None;
@@ -503,6 +524,24 @@ pub fn run_hashcat(
                 continue;
             }
 
+            if let Some((current, total, percent)) = parse_progress_counts(trimmed) {
+                last_progress = Some(percent / 100.0);
+                last_attempts = Some((current, total));
+                progress_callback(HashcatProgress {
+                    status: "Cracking in progress...".to_string(),
+                    progress_percent: percent / 100.0,
+                    speed: last_speed
+                        .clone()
+                        .unwrap_or_else(|| "Working...".to_string()),
+                    rate_per_sec: last_rate_per_sec,
+                    current_attempts: current,
+                    total_attempts: total,
+                    recovered: "0/1".to_string(),
+                    time_estimated: "Working...".to_string(),
+                });
+                continue;
+            }
+
             if let Some(percent) = parse_progress_percent(trimmed) {
                 last_progress = Some(percent / 100.0);
                 progress_callback(HashcatProgress {
@@ -609,6 +648,24 @@ pub fn run_hashcat(
                     rate_per_sec: last_rate_per_sec,
                     current_attempts: last_attempts.map(|a| a.0).unwrap_or(0),
                     total_attempts: last_attempts.map(|a| a.1).unwrap_or(0),
+                    recovered: "0/1".to_string(),
+                    time_estimated: "Working...".to_string(),
+                });
+                continue;
+            }
+
+            if let Some((current, total, percent)) = parse_progress_counts(trimmed) {
+                last_progress = Some(percent / 100.0);
+                last_attempts = Some((current, total));
+                progress_callback(HashcatProgress {
+                    status: "Cracking in progress...".to_string(),
+                    progress_percent: percent / 100.0,
+                    speed: last_speed
+                        .clone()
+                        .unwrap_or_else(|| "Working...".to_string()),
+                    rate_per_sec: last_rate_per_sec,
+                    current_attempts: current,
+                    total_attempts: total,
                     recovered: "0/1".to_string(),
                     time_estimated: "Working...".to_string(),
                 });
