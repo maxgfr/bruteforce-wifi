@@ -56,10 +56,25 @@ fn relaunch_as_root() -> bool {
         Err(_) => return false,
     };
 
+    let user = env::var("USER").unwrap_or_else(|_| "".to_string());
+    let home = env::var("HOME").unwrap_or_else(|_| "".to_string());
+    let logname = env::var("LOGNAME").unwrap_or_else(|_| user.clone());
+
     let mut command = shell_escape(exe.to_string_lossy().as_ref());
     for arg in env::args().skip(1) {
         command.push(' ');
         command.push_str(&shell_escape(&arg));
+    }
+
+    // Preserve user context for file dialogs when relaunching as root
+    if !home.is_empty() {
+        command = format!(
+            "HOME={} USER={} LOGNAME={} {}",
+            shell_escape(&home),
+            shell_escape(&user),
+            shell_escape(&logname),
+            command
+        );
     }
 
     let script = format!(
@@ -128,7 +143,7 @@ fn main() -> iced::Result {
     {
         if !is_root {
             if relaunch_as_root() {
-                return Ok(());
+                std::process::exit(0);
             }
 
             eprintln!("Failed to request administrator privileges. Continuing without root.");

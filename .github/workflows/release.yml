@@ -140,14 +140,6 @@ jobs:
           cp -R "target/release/BrutiFi.app" "${DMG_TEMP}/BrutiFi.app"
           ln -s /Applications "${DMG_TEMP}/Applications"
 
-          echo "BrutiFi v${VERSION}" > "${DMG_TEMP}/README.txt"
-          echo "" >> "${DMG_TEMP}/README.txt"
-          echo "Installation:" >> "${DMG_TEMP}/README.txt"
-          echo "1. Drag 'BrutiFi.app' to Applications folder" >> "${DMG_TEMP}/README.txt"
-          echo "2. Run: sudo /Applications/BrutiFi.app/Contents/MacOS/brutifi" >> "${DMG_TEMP}/README.txt"
-          echo "" >> "${DMG_TEMP}/README.txt"
-          echo "For more information: https://github.com/maxgfr/bruteforce-wifi" >> "${DMG_TEMP}/README.txt"
-
           hdiutil create -volname "BrutiFi" \
             -srcfolder "${DMG_TEMP}" \
             -ov \
