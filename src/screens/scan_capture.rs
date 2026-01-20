@@ -49,6 +49,11 @@ pub struct ScanCaptureScreen {
     // Shared
     pub error_message: Option<String>,
     pub log_messages: Vec<String>,
+    pub last_saved_capture_path: Option<String>,
+
+    // Channel selection for multi-channel networks
+    pub available_channels: Vec<String>,
+    pub selected_channel: Option<String>,
 }
 
 impl Default for ScanCaptureScreen {
@@ -67,6 +72,9 @@ impl Default for ScanCaptureScreen {
             handshake_complete: false,
             error_message: None,
             log_messages: Vec::new(),
+            last_saved_capture_path: None,
+            available_channels: Vec::new(),
+            selected_channel: None,
         }
     }
 }
@@ -114,7 +122,19 @@ impl ScanCaptureScreen {
                 .on_press(Message::StartScan)
         };
 
-        let header = row![title, horizontal_space(), scan_btn,].align_y(iced::Alignment::Center);
+        let reset_btn = button(text("Reset").size(13))
+            .padding([8, 16])
+            .style(theme::secondary_button_style)
+            .on_press(Message::ResetScanState);
+
+        let header = row![
+            title,
+            horizontal_space(),
+            reset_btn,
+            horizontal_space().width(10),
+            scan_btn,
+        ]
+        .align_y(iced::Alignment::Center);
 
         let interface_picker: Element<Message> = if self.interface_list.is_empty() {
             container(text("No interfaces found").size(11).color(colors::TEXT_DIM)).into()
@@ -263,8 +283,36 @@ impl ScanCaptureScreen {
             .into()
     }
 
-    fn view_capture_panel(&self, is_root: bool) -> Element<'_, Message> {
+    fn view_capture_panel(&self, _is_root: bool) -> Element<'_, Message> {
         let title = text("Capture Handshake").size(20).color(colors::TEXT);
+
+        // Info message for WiFi (simple, no detection)
+        let info_message: Element<Message> = container(
+            column![
+                text("ℹ️ Before starting capture:").size(11).color(colors::TEXT_DIM),
+                text("  • If connected to WiFi, click 'Disconnect WiFi' below")
+                    .size(10)
+                    .color(colors::TEXT_DIM),
+                text("  • Select a network from the left")
+                    .size(10)
+                    .color(colors::TEXT_DIM),
+            ]
+            .spacing(2),
+        )
+        .padding(8)
+        .width(Length::Fill)
+        .style(|_| container::Style {
+            background: Some(iced::Background::Color(iced::Color::from_rgba(
+                0.2, 0.6, 0.86, 0.1,
+            ))),
+            border: iced::Border {
+                color: iced::Color::from_rgb(0.4, 0.7, 0.9),
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            ..Default::default()
+        })
+        .into();
 
         // Network selector - simplified without pick_list
         let network_selector: Element<Message> = if self.target_network.is_none() {
@@ -281,6 +329,46 @@ impl ScanCaptureScreen {
                 .padding(10)
                 .style(theme::card_style)
                 .into()
+        };
+
+        // Channel selector (if multiple channels available)
+        let channel_selector: Option<Element<Message>> = if self.available_channels.len() > 1 {
+            Some(
+                container(
+                    column![
+                        row![
+                            text("📡 Multiple channels detected").size(12).color(colors::TEXT),
+                        ],
+                        text("Select which channel to monitor:")
+                            .size(10)
+                            .color(colors::TEXT_DIM),
+                        pick_list(
+                            self.available_channels.as_slice(),
+                            self.selected_channel.as_ref(),
+                            Message::SelectChannel,
+                        )
+                        .placeholder("Choose a channel...")
+                        .width(Length::Fill),
+                    ]
+                    .spacing(6),
+                )
+                .padding(10)
+                .width(Length::Fill)
+                .style(|_| container::Style {
+                    background: Some(iced::Background::Color(iced::Color::from_rgba(
+                        0.86, 0.68, 0.21, 0.15,
+                    ))),
+                    border: iced::Border {
+                        color: iced::Color::from_rgb(0.9, 0.7, 0.3),
+                        width: 1.0,
+                        radius: 4.0.into(),
+                    },
+                    ..Default::default()
+                })
+                .into(),
+            )
+        } else {
+            None
         };
 
         // Target info
@@ -432,102 +520,44 @@ impl ScanCaptureScreen {
                 })
         });
 
-        // Instructions (simplified)
-        let instructions = if !self.is_capturing && !self.handshake_complete {
-            Some(
-                container(
-                    column![
-                        text("💡 Quick start:").size(11).color(colors::TEXT),
-                        text("1. Disconnect from WiFi (macOS: Option+Click WiFi → Disconnect)")
-                            .size(10)
-                            .color(colors::TEXT_DIM),
-                        text("2. Click Start Capture below")
-                            .size(10)
-                            .color(colors::TEXT_DIM),
-                        text("3. Reconnect a device to the network")
-                            .size(10)
-                            .color(colors::TEXT_DIM),
-                    ]
-                    .spacing(2),
-                )
-                .padding(8)
-                .style(|_| container::Style {
-                    background: Some(iced::Background::Color(iced::Color::from_rgba(
-                        0.5, 0.5, 0.5, 0.05,
-                    ))),
-                    border: iced::Border {
-                        color: colors::BORDER,
-                        width: 1.0,
-                        radius: 4.0.into(),
-                    },
-                    ..Default::default()
-                }),
-            )
-        } else {
-            None
-        };
-
-        // Admin mode prompt (macOS)
-        let admin_prompt =
-            if !is_root {
-                if cfg!(target_os = "macos") {
-                    Some(
-                        container(
-                            column![
-                            text("Admin mode required for capture")
-                                .size(12)
-                                .color(colors::TEXT),
-                            text("Enable admin mode to allow packet capture. The app will restart.")
-                                .size(10)
-                                .color(colors::TEXT_DIM),
-                            button(text("Enable Admin Mode").size(12))
-                                .padding([6, 12])
-                                .style(theme::secondary_button_style)
-                                .on_press(Message::EnableAdminMode),
-                        ]
-                            .spacing(6),
-                        )
-                        .padding(10)
-                        .style(theme::card_style),
-                    )
-                } else {
-                    Some(
-                        container(
-                            column![
-                                text("Admin privileges required for capture")
-                                    .size(12)
-                                    .color(colors::TEXT),
-                                text("Please restart the app as Administrator.")
-                                    .size(10)
-                                    .color(colors::TEXT_DIM),
-                            ]
-                            .spacing(6),
-                        )
-                        .padding(10)
-                        .style(theme::card_style),
-                    )
-                }
-            } else {
-                None
-            };
+        let handshake_done = self.handshake_complete || self.handshake_progress.is_complete();
 
         // Control buttons
-        let capture_btn = if self.is_capturing {
-            button(text("Stop Capture").size(13))
-                .padding([10, 20])
-                .style(theme::danger_button_style)
-                .on_press(Message::StopCapture)
+        let capture_btn = if handshake_done {
+            None
+        } else if self.is_capturing {
+            Some(
+                button(text("Stop Capture").size(13))
+                    .padding([10, 20])
+                    .style(theme::danger_button_style)
+                    .on_press(Message::StopCapture),
+            )
         } else {
-            let can_capture = self.target_network.is_some();
+            // Check if network is selected AND if multiple channels, one must be selected
+            let network_selected = self.target_network.is_some();
+            let channel_ok = if self.available_channels.len() > 1 {
+                self.selected_channel.is_some()
+            } else {
+                true
+            };
+            let can_capture = network_selected && channel_ok;
+
             let btn = button(text("Start Capture").size(13))
                 .padding([10, 20])
                 .style(theme::primary_button_style);
             if can_capture {
-                btn.on_press(Message::StartCapture)
+                Some(btn.on_press(Message::StartCapture))
             } else {
-                btn
+                Some(btn)
             }
         };
+
+        let disconnect_btn = Some(
+            button(text("Disconnect WiFi").size(13))
+                .padding([10, 20])
+                .style(theme::secondary_button_style)
+                .on_press(Message::DisconnectWifi),
+        );
 
         let continue_btn = if self.handshake_complete || self.handshake_progress.is_complete() {
             Some(
@@ -552,7 +582,12 @@ impl ScanCaptureScreen {
         };
 
         // Build layout
-        let mut content = column![title, horizontal_rule(1), network_selector,].spacing(10);
+        let mut content = column![title, horizontal_rule(1), info_message, network_selector,].spacing(10);
+
+        // Add channel selector if available
+        if let Some(selector) = channel_selector {
+            content = content.push(selector);
+        }
 
         if let Some(info) = target_info {
             content = content.push(info);
@@ -600,15 +635,13 @@ impl ScanCaptureScreen {
             content = content.push(error);
         }
 
-        if let Some(prompt) = admin_prompt {
-            content = content.push(prompt);
+        let mut button_row = row![].spacing(10);
+        if let Some(btn) = disconnect_btn {
+            button_row = button_row.push(btn);
         }
-
-        if let Some(instr) = instructions {
-            content = content.push(instr);
+        if let Some(btn) = capture_btn {
+            button_row = button_row.push(btn);
         }
-
-        let mut button_row = row![capture_btn,].spacing(10);
         if let Some(btn) = continue_btn {
             button_row = button_row.push(btn);
         }

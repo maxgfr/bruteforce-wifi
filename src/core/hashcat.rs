@@ -12,6 +12,56 @@ use anyhow::{anyhow, Result};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+fn find_hashcat_binary() -> Option<String> {
+    let candidates = [
+        "hashcat",
+        "/opt/homebrew/bin/hashcat",
+        "/usr/local/bin/hashcat",
+        "/opt/local/bin/hashcat",
+        "/usr/bin/hashcat",
+    ];
+
+    for bin in candidates {
+        if Command::new(bin)
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+        {
+            return Some(bin.to_string());
+        }
+    }
+
+    None
+}
+
+fn find_hcxpcapngtool_binary() -> Option<String> {
+    let candidates = [
+        "hcxpcapngtool",
+        "/opt/homebrew/bin/hcxpcapngtool",
+        "/usr/local/bin/hcxpcapngtool",
+        "/opt/local/bin/hcxpcapngtool",
+        "/usr/bin/hcxpcapngtool",
+    ];
+
+    for bin in candidates {
+        if Command::new(bin)
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+        {
+            return Some(bin.to_string());
+        }
+    }
+
+    None
+}
+
 /// Format speed in human-readable format (H/s, KH/s, MH/s, GH/s)
 fn format_speed(speed: f64) -> String {
     if speed >= 1_000_000_000.0 {
@@ -168,24 +218,12 @@ fn parse_cracked_password(line: &str) -> Option<String> {
 
 /// Check if hcxpcapngtool is installed
 pub fn is_hcxtools_installed() -> bool {
-    Command::new("hcxpcapngtool")
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    find_hcxpcapngtool_binary().is_some()
 }
 
 /// Check if hashcat is installed
 pub fn is_hashcat_installed() -> bool {
-    Command::new("hashcat")
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    find_hashcat_binary().is_some()
 }
 
 /// Check if both tools are available
@@ -195,7 +233,8 @@ pub fn are_external_tools_available() -> (bool, bool) {
 
 /// Get hashcat version info
 pub fn get_hashcat_version() -> Option<String> {
-    Command::new("hashcat")
+    let bin = find_hashcat_binary()?;
+    Command::new(bin)
         .arg("--version")
         .output()
         .ok()
@@ -206,7 +245,11 @@ pub fn get_hashcat_version() -> Option<String> {
 /// Detect available hashcat devices and return optimal device type
 /// Returns: 3 for CPU+GPU (best), 2 for GPU only, 1 for CPU only
 pub fn detect_optimal_device_type() -> u8 {
-    let output = Command::new("hashcat").arg("-I").output();
+    let Some(bin) = find_hashcat_binary() else {
+        return 2;
+    };
+
+    let output = Command::new(bin).arg("-I").output();
 
     if let Ok(output) = output {
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -231,14 +274,22 @@ pub fn detect_optimal_device_type() -> u8 {
 
 /// Convert PCAP/CAP file to hashcat 22000 format using hcxpcapngtool
 pub fn convert_to_hashcat_format(pcap_path: &Path) -> Result<PathBuf> {
-    // Generate output path in /tmp directory
+    // Generate unique output path in /tmp directory
     let filename = pcap_path
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("capture");
-    let output_path = PathBuf::from(format!("/tmp/{}.22000", filename));
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let output_path = PathBuf::from(format!("/tmp/{}_{}.22000", filename, ts));
 
-    let output = Command::new("hcxpcapngtool")
+    let Some(bin) = find_hcxpcapngtool_binary() else {
+        return Err(anyhow!("hcxpcapngtool not found. Please install hcxtools."));
+    };
+
+    let output = Command::new(bin)
         .arg("-o")
         .arg(&output_path)
         .arg(pcap_path)
@@ -246,13 +297,17 @@ pub fn convert_to_hashcat_format(pcap_path: &Path) -> Result<PathBuf> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let details = if !stderr.trim().is_empty() {
+            stderr.trim().to_string()
+        } else if !stdout.trim().is_empty() {
+            stdout.trim().to_string()
+        } else {
+            "No handshake found in capture file".to_string()
+        };
         return Err(anyhow!(
-            "hcxpcapngtool failed: {}",
-            if stderr.is_empty() {
-                "No handshake found in capture file"
-            } else {
-                stderr.trim()
-            }
+            "hcxpcapngtool failed: {}. Ensure the capture contains a valid WPA handshake or PMKID.",
+            details
         ));
     }
 
@@ -381,7 +436,16 @@ pub fn run_hashcat(
     // Note: stop_flag being false means user requested stop
     // We don't check it before starting, only during execution
 
-    let mut cmd = Command::new("hashcat");
+    let hashcat_bin = match find_hashcat_binary() {
+        Some(bin) => bin,
+        None => {
+            return HashcatResult::Error(
+                "hashcat not found. Please install hashcat and try again.".to_string(),
+            )
+        }
+    };
+
+    let mut cmd = Command::new(hashcat_bin);
 
     // WPA/WPA2 mode
     cmd.arg("-m").arg("22000");

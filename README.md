@@ -177,6 +177,21 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test
 ```
 
+### Build macOS DMG (Local)
+
+You can build a macOS DMG installer locally from the source code:
+
+```bash
+# Build DMG (automatically detects architecture)
+./scripts/build_dmg.sh
+```
+
+This will create:
+- `BrutiFi-{VERSION}-macOS-arm64.dmg` (Apple Silicon)
+- `BrutiFi-{VERSION}-macOS-arm64.dmg.sha256` (checksum)
+
+**Note**: The application is signed with ad-hoc signing by default, which is sufficient for local use and testing. No additional code signing is required.
+
 ### Optional: Hashcat Integration
 
 For GPU-accelerated cracking, install:

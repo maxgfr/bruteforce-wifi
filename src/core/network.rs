@@ -236,29 +236,86 @@ fn parse_airport_output(output: &str) -> Result<Vec<WifiNetwork>> {
 fn check_wifi_connected() -> Option<String> {
     use std::process::Command;
 
-    let airport_path =
-        "/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport";
+    eprintln!("[DEBUG] check_wifi_connected() called");
 
-    let output = Command::new(airport_path).arg("-I").output().ok()?;
+    // Use Swift/CoreWLAN for reliable WiFi status (modern macOS approach)
+    let script_content = r#"
+import CoreWLAN
+import Foundation
 
-    if !output.status.success() {
+let client = CWWiFiClient.shared()
+if let interface = client.interface() {
+    if let ssid = interface.ssid() {
+        if !ssid.isEmpty {
+            print(ssid)
+            exit(0)
+        }
+    }
+}
+// Not connected or no SSID
+exit(1)
+"#;
+
+    let script_path = "/tmp/wifi_check.swift";
+
+    // Write script
+    if let Err(e) = std::fs::write(script_path, script_content) {
+        eprintln!("[ERROR] Failed to write Swift script: {}", e);
         return None;
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    eprintln!("[DEBUG] Executing Swift script for WiFi check...");
+    let start = std::time::Instant::now();
 
-    // Look for " SSID: " line
-    for line in stdout.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("SSID:") {
-            let ssid = trimmed.strip_prefix("SSID:")?.trim();
-            if !ssid.is_empty() {
-                return Some(ssid.to_string());
-            }
+    // Execute
+    let output = match Command::new("swift")
+        .arg(script_path)
+        .output() {
+        Ok(out) => out,
+        Err(e) => {
+            eprintln!("[ERROR] Failed to execute Swift: {}", e);
+            return None;
         }
+    };
+
+    let elapsed = start.elapsed();
+    eprintln!("[DEBUG] Swift execution took {:?}", elapsed);
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    if !stderr.is_empty() {
+        eprintln!("[DEBUG] Swift stderr: {}", stderr.trim());
     }
 
+    if output.status.success() {
+        let ssid = stdout.trim().to_string();
+        if !ssid.is_empty() {
+            eprintln!("[DEBUG] ✓ WiFi connected to: '{}'", ssid);
+            return Some(ssid);
+        } else {
+            eprintln!("[DEBUG] Swift succeeded but returned empty SSID");
+        }
+    } else {
+        eprintln!("[DEBUG] Swift exited with status: {:?}", output.status.code());
+        eprintln!("[DEBUG] stdout: {}", stdout.trim());
+    }
+
+    eprintln!("[DEBUG] ✗ WiFi not connected");
     None
+}
+
+/// Get current connected SSID on macOS (if any)
+pub fn wifi_connected_ssid() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        check_wifi_connected()
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
 }
 
 /// Disconnect from WiFi on macOS

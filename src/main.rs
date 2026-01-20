@@ -54,7 +54,7 @@ fn shell_escape(arg: &str) -> String {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn relaunch_as_root() -> bool {
+pub(crate) fn relaunch_as_root_with_env(envs: &[(&'static str, String)]) -> bool {
     let exe = match env::current_exe() {
         Ok(path) => path,
         Err(_) => return false,
@@ -63,6 +63,7 @@ pub(crate) fn relaunch_as_root() -> bool {
     let user = env::var("USER").unwrap_or_else(|_| "".to_string());
     let home = env::var("HOME").unwrap_or_else(|_| "".to_string());
     let logname = env::var("LOGNAME").unwrap_or_else(|_| user.clone());
+    let path_env = env::var("PATH").unwrap_or_else(|_| "".to_string());
 
     let mut command = shell_escape(exe.to_string_lossy().as_ref());
     for arg in env::args().skip(1) {
@@ -70,15 +71,24 @@ pub(crate) fn relaunch_as_root() -> bool {
         command.push_str(&shell_escape(&arg));
     }
 
-    // Preserve user context for file dialogs when relaunching as root
+    // Preserve user context and PATH for file dialogs/tools when relaunching as root
+    let mut env_prefix = String::new();
     if !home.is_empty() {
-        command = format!(
-            "HOME={} USER={} LOGNAME={} {}",
+        env_prefix.push_str(&format!(
+            "HOME={} USER={} LOGNAME={} ",
             shell_escape(&home),
             shell_escape(&user),
-            shell_escape(&logname),
-            command
-        );
+            shell_escape(&logname)
+        ));
+    }
+    if !path_env.is_empty() {
+        env_prefix.push_str(&format!("PATH={} ", shell_escape(&path_env)));
+    }
+    for (k, v) in envs {
+        env_prefix.push_str(&format!("{}={} ", k, shell_escape(v)));
+    }
+    if !env_prefix.is_empty() {
+        command = format!("{}{}", env_prefix, command);
     }
 
     let script = format!(
@@ -89,9 +99,14 @@ pub(crate) fn relaunch_as_root() -> bool {
     Command::new("osascript")
         .arg("-e")
         .arg(script)
-        .status()
-        .map(|status| status.success())
+        .spawn()
+        .map(|_| true)
         .unwrap_or(false)
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn relaunch_as_root() -> bool {
+    relaunch_as_root_with_env(&[])
 }
 
 #[cfg(target_os = "macos")]
@@ -130,11 +145,7 @@ pub(crate) fn relaunch_as_user(envs: &[(&'static str, String)]) -> bool {
         cmd.env(*k, v);
     }
 
-    cmd.uid(uid)
-        .gid(gid)
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+    cmd.uid(uid).gid(gid).spawn().map(|_| true).unwrap_or(false)
 }
 
 /// Setup panic handler to show errors instead of silent exit

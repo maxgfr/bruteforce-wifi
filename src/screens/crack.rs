@@ -14,9 +14,10 @@ use iced::{Element, Length};
 
 use crate::app::Message;
 use crate::theme::{self, colors};
+use serde::{Deserialize, Serialize};
 
 /// Cracking engine selection
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum CrackEngine {
     #[default]
     Native,
@@ -33,7 +34,7 @@ impl std::fmt::Display for CrackEngine {
 }
 
 /// Crack method selection
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum CrackMethod {
     #[default]
     Numeric,
@@ -123,13 +124,9 @@ impl CrackScreen {
                         text("File access limited in admin mode")
                             .size(12)
                             .color(colors::TEXT),
-                        text("Switch back to normal mode to browse your files.")
+                        text("Capture will automatically return to normal mode once finished.")
                             .size(10)
                             .color(colors::TEXT_DIM),
-                        button(text("Switch to Normal Mode").size(12))
-                            .padding([6, 12])
-                            .style(theme::secondary_button_style)
-                            .on_press(Message::ReturnToNormalMode),
                     ]
                     .spacing(6),
                 )

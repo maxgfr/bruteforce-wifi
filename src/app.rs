@@ -12,6 +12,7 @@ use iced::time;
 use iced::widget::{button, column, container, horizontal_rule, row, text, text_editor};
 use iced::{clipboard, Element, Length, Subscription, Task, Theme};
 use pcap::Device;
+use serde::{Deserialize, Serialize};
 
 use crate::screens::{CrackEngine, CrackMethod, CrackScreen, HandshakeProgress, ScanCaptureScreen};
 use crate::theme::colors;
@@ -20,6 +21,7 @@ use crate::workers::{
     WordlistCrackParams,
 };
 use crate::workers_optimized;
+use brutifi::WifiNetwork;
 
 /// Application screens
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -39,16 +41,21 @@ pub enum Message {
     // Scan & Capture screen
     StartScan,
     StopScan,
+    ResetScanState,
     ScanComplete(ScanResult),
     SelectNetwork(usize),
+    SelectChannel(String),
     InterfaceSelected(String),
     BrowseCaptureFile,
     CaptureFileSelected(Option<PathBuf>),
     DownloadCapturedPcap,
     SaveCapturedPcap(Option<PathBuf>),
+    DisconnectWifi,
+    WifiDisconnectResult(Result<(), String>),
     StartCapture,
     StopCapture,
     CaptureProgress(workers::CaptureProgress),
+    #[allow(dead_code)]
     EnableAdminMode,
 
     // Crack screen
@@ -69,6 +76,7 @@ pub enum Message {
     CopyPassword,
     CopyLogs,
     LogsEditorAction(text_editor::Action),
+    #[allow(dead_code)]
     ReturnToNormalMode,
 
     // General
@@ -85,6 +93,43 @@ pub struct BruteforceApp {
     capture_progress_rx: Option<tokio::sync::mpsc::UnboundedReceiver<workers::CaptureProgress>>,
     crack_state: Option<Arc<CrackState>>,
     crack_progress_rx: Option<tokio::sync::mpsc::UnboundedReceiver<workers::CrackProgress>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct PersistedState {
+    version: u32,
+    scan: PersistedScanState,
+    capture: PersistedCaptureState,
+    crack: PersistedCrackState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct PersistedScanState {
+    networks: Vec<WifiNetwork>,
+    selected_network: Option<usize>,
+    selected_interface: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct PersistedCaptureState {
+    target_network: Option<WifiNetwork>,
+    output_file: String,
+    handshake_complete: bool,
+    packets_captured: u64,
+    last_saved_capture_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct PersistedCrackState {
+    handshake_path: String,
+    use_captured_file: bool,
+    ssid: String,
+    engine: CrackEngine,
+    method: CrackMethod,
+    min_digits: String,
+    max_digits: String,
+    wordlist_path: String,
+    threads: usize,
 }
 
 impl BruteforceApp {
@@ -109,9 +154,17 @@ impl BruteforceApp {
                 crack_progress_rx: None,
             };
 
+            if let Some(persisted) = load_persisted_state() {
+                app.apply_persisted_state(persisted);
+            }
+
             if let Ok(screen) = std::env::var("BRUTIFI_START_SCREEN") {
                 if screen.eq_ignore_ascii_case("crack") {
                     app.screen = Screen::Crack;
+                } else if screen.eq_ignore_ascii_case("scan")
+                    || screen.eq_ignore_ascii_case("capture")
+                {
+                    app.screen = Screen::ScanCapture;
                 }
             }
 
@@ -137,12 +190,25 @@ impl BruteforceApp {
                 }
             }
 
-            (app, Task::none())
+            let auto_capture = std::env::var("BRUTIFI_AUTO_CAPTURE")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+
+            // Optional auto-capture
+            if auto_capture
+                && is_root
+                && app.screen == Screen::ScanCapture
+                && app.scan_capture_screen.target_network.is_some()
+            {
+                (app, Task::done(Message::StartCapture))
+            } else {
+                (app, Task::none())
+            }
         }
 
         #[cfg(not(target_os = "macos"))]
         {
-            let app = Self {
+            let mut app = Self {
                 screen: Screen::ScanCapture,
                 scan_capture_screen: ScanCaptureScreen {
                     interface_list,
@@ -156,6 +222,10 @@ impl BruteforceApp {
                 crack_state: None,
                 crack_progress_rx: None,
             };
+
+            if let Some(persisted) = load_persisted_state() {
+                app.apply_persisted_state(persisted);
+            }
 
             (app, Task::none())
         }
@@ -183,23 +253,73 @@ impl BruteforceApp {
                 Task::none()
             }
             Message::GoToCrack => {
-                // Set handshake path from capture
-                if !self.scan_capture_screen.output_file.is_empty() {
-                    self.crack_screen.handshake_path = self.scan_capture_screen.output_file.clone();
+                #[cfg(target_os = "macos")]
+                if self.is_root {
+                    let mut envs = Vec::new();
+                    envs.push(("BRUTIFI_START_SCREEN", "crack".to_string()));
+                    if !self.scan_capture_screen.output_file.is_empty() {
+                        envs.push((
+                            "BRUTIFI_HANDSHAKE_PATH",
+                            self.scan_capture_screen.output_file.clone(),
+                        ));
+                    }
+                    if let Some(ref network) = self.scan_capture_screen.target_network {
+                        if !network.ssid.is_empty() {
+                            envs.push(("BRUTIFI_SSID", network.ssid.clone()));
+                        }
+                    }
+                    envs.push((
+                        "BRUTIFI_USE_CAPTURED",
+                        if self.crack_screen.use_captured_file {
+                            "1".to_string()
+                        } else {
+                            "0".to_string()
+                        },
+                    ));
+                    if !self.crack_screen.wordlist_path.is_empty() {
+                        envs.push((
+                            "BRUTIFI_WORDLIST_PATH",
+                            self.crack_screen.wordlist_path.clone(),
+                        ));
+                    }
+
+                    if crate::relaunch_as_user(&envs) {
+                        std::process::exit(0);
+                    }
+
+                    self.crack_screen.error_message = Some(
+                        "Failed to return to normal mode. Please restart the app manually."
+                            .to_string(),
+                    );
+                }
+
+                // Set handshake path from capture only if using captured file
+                if self.crack_screen.use_captured_file {
+                    if let Some(ref saved) = self.scan_capture_screen.last_saved_capture_path {
+                        if !saved.is_empty() {
+                            self.crack_screen.handshake_path = saved.clone();
+                        }
+                    } else if !self.scan_capture_screen.output_file.is_empty() {
+                        self.crack_screen.handshake_path =
+                            self.scan_capture_screen.output_file.clone();
+                    }
                 }
                 // Set SSID from captured network
                 if let Some(ref network) = self.scan_capture_screen.target_network {
                     self.crack_screen.ssid = network.ssid.clone();
                 }
 
-                // Reset crack screen state
-                self.crack_screen.error_message = None;
-                self.crack_screen.found_password = None;
-                self.crack_screen.password_not_found = false;
-                self.crack_screen.current_attempts = 0;
-                self.crack_screen.progress = 0.0;
-                self.crack_screen.log_messages.clear();
-                self.crack_screen.logs_content = text_editor::Content::new();
+                // Only reset crack screen state if NOT currently cracking
+                // This preserves logs when navigating back to the crack screen
+                if !self.crack_screen.is_cracking {
+                    self.crack_screen.error_message = None;
+                    self.crack_screen.found_password = None;
+                    self.crack_screen.password_not_found = false;
+                    self.crack_screen.current_attempts = 0;
+                    self.crack_screen.progress = 0.0;
+                    self.crack_screen.log_messages.clear();
+                    self.crack_screen.logs_content = text_editor::Content::new();
+                }
 
                 self.screen = Screen::Crack;
                 Task::none()
@@ -224,6 +344,23 @@ impl BruteforceApp {
                 self.scan_capture_screen.is_scanning = false;
                 Task::none()
             }
+            Message::ResetScanState => {
+                if let Some(ref state) = self.capture_state {
+                    state.stop();
+                }
+                self.capture_state = None;
+                self.capture_progress_rx = None;
+
+                let interface_list = self.scan_capture_screen.interface_list.clone();
+                let selected_interface = self.scan_capture_screen.selected_interface.clone();
+                self.scan_capture_screen = ScanCaptureScreen {
+                    interface_list,
+                    selected_interface,
+                    ..ScanCaptureScreen::default()
+                };
+                self.persist_state();
+                Task::none()
+            }
             Message::ScanComplete(result) => {
                 self.scan_capture_screen.is_scanning = false;
                 match result {
@@ -235,6 +372,7 @@ impl BruteforceApp {
                         self.scan_capture_screen.error_message = Some(msg);
                     }
                 }
+                self.persist_state();
                 Task::none()
             }
             Message::SelectNetwork(idx) => {
@@ -246,11 +384,33 @@ impl BruteforceApp {
                     self.scan_capture_screen.handshake_complete = false;
                     // Reset bits captured
                     self.scan_capture_screen.packets_captured = 0;
+
+                    // Extract available channels from the network
+                    let channels: Vec<String> = network
+                        .channel
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .collect();
+
+                    self.scan_capture_screen.available_channels = channels.clone();
+
+                    // Auto-select first channel if multiple
+                    if channels.len() == 1 {
+                        self.scan_capture_screen.selected_channel = Some(channels[0].clone());
+                    } else {
+                        self.scan_capture_screen.selected_channel = None;
+                    }
                 }
+                self.persist_state();
+                Task::none()
+            }
+            Message::SelectChannel(channel) => {
+                self.scan_capture_screen.selected_channel = Some(channel);
                 Task::none()
             }
             Message::InterfaceSelected(interface) => {
                 self.scan_capture_screen.selected_interface = interface;
+                self.persist_state();
                 Task::none()
             }
             Message::BrowseCaptureFile => Task::perform(
@@ -281,6 +441,7 @@ impl BruteforceApp {
                 if let Some(path) = path {
                     self.scan_capture_screen.output_file = path.to_string_lossy().to_string();
                 }
+                self.persist_state();
                 Task::none()
             }
             Message::SaveCapturedPcap(path) => {
@@ -291,6 +452,11 @@ impl BruteforceApp {
                             self.scan_capture_screen.error_message =
                                 Some(format!("Failed to save capture: {}", e));
                         } else {
+                            self.scan_capture_screen.last_saved_capture_path =
+                                Some(dest.display().to_string());
+                            if self.crack_screen.use_captured_file {
+                                self.crack_screen.handshake_path = dest.display().to_string();
+                            }
                             self.scan_capture_screen
                                 .log_messages
                                 .push(format!("✅ Capture saved to {}", dest.display()));
@@ -303,78 +469,159 @@ impl BruteforceApp {
                             Some(format!("Capture file not found: {}", src.display()));
                     }
                 }
+                self.persist_state();
+                Task::none()
+            }
+            Message::DisconnectWifi => Task::perform(
+                async {
+                    tokio::task::spawn_blocking(|| -> Result<(), String> {
+                        brutifi::disconnect_wifi().map_err(|e| e.to_string())
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(e.to_string()))
+                },
+                Message::WifiDisconnectResult,
+            ),
+            Message::WifiDisconnectResult(result) => {
+                match result {
+                    Ok(()) => {
+                        self.scan_capture_screen.error_message = None;
+                        self.scan_capture_screen
+                            .log_messages
+                            .push("🔌 WiFi disconnected successfully".to_string());
+
+                        // Wait a moment then verify disconnection worked
+                        // This ensures the UI reflects the actual WiFi state
+                        self.scan_capture_screen
+                            .log_messages
+                            .push("✓ You can now start capture".to_string());
+
+                    }
+                    Err(err) => {
+                        self.scan_capture_screen.error_message = Some(err.clone());
+                        self.scan_capture_screen
+                            .log_messages
+                            .push(format!("❌ Disconnect failed: {}", err));
+                    }
+                }
+                if self.scan_capture_screen.log_messages.len() > 50 {
+                    self.scan_capture_screen.log_messages.remove(0);
+                }
                 Task::none()
             }
             Message::StartCapture => {
-                if let Some(ref network) = self.scan_capture_screen.target_network {
-                    // Check if running as root
-                    if !self.is_root {
+                let network = match self.scan_capture_screen.target_network.clone() {
+                    Some(network) => network,
+                    None => {
+                        self.scan_capture_screen.error_message =
+                            Some("No target network selected".to_string());
+                        return Task::none();
+                    }
+                };
+
+                // Simplified: Just log if WiFi is connected (warning, not blocking)
+                if let Some(ssid) = brutifi::wifi_connected_ssid() {
+                    self.scan_capture_screen
+                        .log_messages
+                        .push(format!("⚠️ Warning: WiFi connected to '{}'. Consider disconnecting for better capture.", ssid));
+                }
+
+                // Check if running as root
+                if !self.is_root {
+                    #[cfg(target_os = "macos")]
+                    {
+                        self.scan_capture_screen.error_message =
+                            Some("Requesting admin privileges for capture...".to_string());
+                        self.persist_state();
+                        let envs = self.build_relaunch_envs_for_capture(true);
+                        if crate::relaunch_as_root_with_env(&envs) {
+                            std::process::exit(0);
+                        }
                         self.scan_capture_screen.error_message = Some(
-                            "Capture requires admin privileges. Click 'Enable Admin Mode' in this screen, or run with sudo."
-                                .to_string(),
-                        );
+                                "Failed to request admin privileges. Please try again or launch with sudo."
+                                    .to_string(),
+                            );
                         return Task::none();
                     }
 
-                    self.scan_capture_screen.is_capturing = true;
-                    self.scan_capture_screen.error_message = None;
-                    self.scan_capture_screen.packets_captured = 0;
-                    self.scan_capture_screen.handshake_progress = HandshakeProgress::default();
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        self.scan_capture_screen.error_message = Some(
+                                "Capture requires admin privileges. Please restart the app as Administrator."
+                                    .to_string(),
+                            );
+                        return Task::none();
+                    }
+                }
 
-                    let state = Arc::new(CaptureState::new());
-                    self.capture_state = Some(state.clone());
+                self.scan_capture_screen.is_capturing = true;
+                self.scan_capture_screen.error_message = None;
+                self.scan_capture_screen.packets_captured = 0;
+                self.scan_capture_screen.handshake_progress = HandshakeProgress::default();
+                self.persist_state();
 
-                    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-                    self.capture_progress_rx = Some(rx);
+                let state = Arc::new(CaptureState::new());
+                self.capture_state = Some(state.clone());
 
-                    // Parse channel from network (robust)
-                    let channel = network.channel.split(',').next().and_then(|ch| {
-                        // Try to find the first sequence of digits
-                        // This handles "36 (5GHz)", "Channel 6", "1", etc.
-                        ch.split(|c: char| !c.is_ascii_digit())
-                            .find(|s| !s.is_empty())
-                            .and_then(|s| s.parse::<u32>().ok())
+                let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+                self.capture_progress_rx = Some(rx);
+
+                // Use selected channel if available, otherwise use first channel from network
+                let channel_str = self
+                    .scan_capture_screen
+                    .selected_channel
+                    .clone()
+                    .or_else(|| {
+                        // Fallback: take first channel from network
+                        network.channel.split(',').next().map(|s| s.trim().to_string())
                     });
 
-                    // Check if channel was successfully parsed
-                    if channel.is_none() {
-                        self.scan_capture_screen.error_message = Some(
-                            format!("Could not detect channel from network info (channel field: '{}'). Please rescan.", network.channel)
-                        );
-                        self.scan_capture_screen.is_capturing = false;
-                        return Task::none();
-                    }
+                let channel = channel_str.and_then(|ch| {
+                    // Try to parse channel number
+                    // This handles "36", "36 (5GHz)", "Channel 6", etc.
+                    ch.split(|c: char| !c.is_ascii_digit())
+                        .find(|s| !s.is_empty())
+                        .and_then(|s| s.parse::<u32>().ok())
+                });
 
-                    // Log channel selection
-                    eprintln!(
-                        "[DEBUG] Starting capture on channel: {:?} (raw: '{}')",
-                        channel, network.channel
+                // Check if channel was successfully parsed
+                if channel.is_none() {
+                    self.scan_capture_screen.error_message = Some(
+                        format!("Could not detect channel from network info (channel field: '{}'). Please rescan.", network.channel)
                     );
-
-                    // Warn if multiple channels detected
-                    if network.channel.contains(',') {
-                        self.scan_capture_screen.error_message = Some(
-                            format!("Multiple channels detected ({}). Using channel {}. If capture fails, disconnect from WiFi and rescan.", 
-                                network.channel, channel.unwrap())
-                        );
-                    }
-
-                    let params = CaptureParams {
-                        interface: self.scan_capture_screen.selected_interface.clone(),
-                        channel,
-                        ssid: Some(network.ssid.clone()),
-                        output_file: self.scan_capture_screen.output_file.clone(),
-                    };
-
-                    Task::perform(
-                        workers::capture_async(params, state, tx),
-                        Message::CaptureProgress,
-                    )
-                } else {
-                    self.scan_capture_screen.error_message =
-                        Some("No target network selected".to_string());
-                    Task::none()
+                    self.scan_capture_screen.is_capturing = false;
+                    return Task::none();
                 }
+
+                // Warn if multiple channels available but none selected
+                if self.scan_capture_screen.available_channels.len() > 1
+                    && self.scan_capture_screen.selected_channel.is_none()
+                {
+                    self.scan_capture_screen.error_message = Some(
+                        "Multiple channels available. Please select a channel before starting capture.".to_string()
+                    );
+                    self.scan_capture_screen.is_capturing = false;
+                    return Task::none();
+                }
+
+                // Log channel selection
+                let selected_ch_str = self.scan_capture_screen.selected_channel.as_deref().unwrap_or("auto");
+                eprintln!(
+                    "[DEBUG] Starting capture on channel: {:?} (selected: '{}', network raw: '{}')",
+                    channel, selected_ch_str, network.channel
+                );
+
+                let params = CaptureParams {
+                    interface: self.scan_capture_screen.selected_interface.clone(),
+                    channel,
+                    ssid: Some(network.ssid.clone()),
+                    output_file: self.scan_capture_screen.output_file.clone(),
+                };
+
+                Task::perform(
+                    workers::capture_async(params, state, tx),
+                    Message::CaptureProgress,
+                )
             }
             Message::StopCapture => {
                 if let Some(ref state) = self.capture_state {
@@ -382,6 +629,7 @@ impl BruteforceApp {
                 }
                 self.scan_capture_screen.is_capturing = false;
                 self.capture_progress_rx = None;
+                self.persist_state();
                 Task::none()
             }
             Message::CaptureProgress(progress) => {
@@ -395,10 +643,21 @@ impl BruteforceApp {
                     }
                     workers::CaptureProgress::HandshakeComplete { ssid } => {
                         self.scan_capture_screen.handshake_complete = true;
+                        self.scan_capture_screen.handshake_progress.m1_received = true;
+                        self.scan_capture_screen.handshake_progress.m2_received = true;
                         self.scan_capture_screen.is_capturing = false;
                         self.scan_capture_screen
                             .log_messages
                             .push(format!("✅ Handshake captured for '{}'", ssid));
+                        self.persist_state();
+
+                        #[cfg(target_os = "macos")]
+                        if self.is_root {
+                            let envs = self.build_relaunch_envs_for_capture(false);
+                            if crate::relaunch_as_user(&envs) {
+                                std::process::exit(0);
+                            }
+                        }
                     }
                     workers::CaptureProgress::Error(msg) => {
                         self.scan_capture_screen.error_message = Some(msg.clone());
@@ -406,6 +665,7 @@ impl BruteforceApp {
                         self.scan_capture_screen
                             .log_messages
                             .push(format!("❌ Error: {}", msg));
+                        self.persist_state();
                     }
                     workers::CaptureProgress::Finished {
                         output_file,
@@ -414,6 +674,7 @@ impl BruteforceApp {
                         self.scan_capture_screen.output_file = output_file;
                         self.scan_capture_screen.packets_captured = packets;
                         self.scan_capture_screen.is_capturing = false;
+                        self.persist_state();
                     }
                     _ => {}
                 }
@@ -448,36 +709,53 @@ impl BruteforceApp {
                 self.crack_screen.use_captured_file = enabled;
                 if enabled {
                     // Auto-populate from scan_capture screen
-                    self.crack_screen.handshake_path = self.scan_capture_screen.output_file.clone();
+                    if let Some(ref saved) = self.scan_capture_screen.last_saved_capture_path {
+                        if !saved.is_empty() {
+                            self.crack_screen.handshake_path = saved.clone();
+                        } else {
+                            self.crack_screen.handshake_path =
+                                self.scan_capture_screen.output_file.clone();
+                        }
+                    } else {
+                        self.crack_screen.handshake_path =
+                            self.scan_capture_screen.output_file.clone();
+                    }
                 }
+                self.persist_state();
                 Task::none()
             }
             Message::HandshakePathChanged(path) => {
                 self.crack_screen.handshake_path = path;
+                self.persist_state();
                 Task::none()
             }
             Message::EngineChanged(engine) => {
                 self.crack_screen.engine = engine;
+                self.persist_state();
                 Task::none()
             }
             Message::MethodChanged(method) => {
                 self.crack_screen.method = method;
+                self.persist_state();
                 Task::none()
             }
             Message::MinDigitsChanged(val) => {
                 if val.is_empty() || val.parse::<usize>().is_ok() {
                     self.crack_screen.min_digits = val;
+                    self.persist_state();
                 }
                 Task::none()
             }
             Message::MaxDigitsChanged(val) => {
                 if val.is_empty() || val.parse::<usize>().is_ok() {
                     self.crack_screen.max_digits = val;
+                    self.persist_state();
                 }
                 Task::none()
             }
             Message::WordlistPathChanged(path) => {
                 self.crack_screen.wordlist_path = path;
+                self.persist_state();
                 Task::none()
             }
             Message::BrowseHandshake => Task::perform(
@@ -505,13 +783,16 @@ impl BruteforceApp {
             Message::HandshakeSelected(path) => {
                 if let Some(p) = path {
                     self.crack_screen.handshake_path = p.display().to_string();
+                    self.crack_screen.use_captured_file = false;
                 }
+                self.persist_state();
                 Task::none()
             }
             Message::WordlistSelected(path) => {
                 if let Some(p) = path {
                     self.crack_screen.wordlist_path = p.display().to_string();
                 }
+                self.persist_state();
                 Task::none()
             }
             Message::StartCrack => {
@@ -874,6 +1155,105 @@ impl BruteforceApp {
 
         main_col.into()
     }
+
+    fn apply_persisted_state(&mut self, state: PersistedState) {
+        if !state.scan.selected_interface.is_empty() {
+            self.scan_capture_screen.selected_interface = state.scan.selected_interface;
+        }
+        self.scan_capture_screen.networks = state.scan.networks;
+        self.scan_capture_screen.selected_network = state
+            .scan
+            .selected_network
+            .filter(|idx| *idx < self.scan_capture_screen.networks.len());
+        self.scan_capture_screen.target_network = state.capture.target_network;
+        if self.scan_capture_screen.target_network.is_none() {
+            if let Some(idx) = self.scan_capture_screen.selected_network {
+                if let Some(net) = self.scan_capture_screen.networks.get(idx) {
+                    self.scan_capture_screen.target_network = Some(net.clone());
+                }
+            }
+        }
+        if !state.capture.output_file.is_empty() {
+            self.scan_capture_screen.output_file = state.capture.output_file;
+        }
+        self.scan_capture_screen.handshake_complete = state.capture.handshake_complete;
+        if self.scan_capture_screen.handshake_complete {
+            self.scan_capture_screen.handshake_progress.m1_received = true;
+            self.scan_capture_screen.handshake_progress.m2_received = true;
+        }
+        self.scan_capture_screen.packets_captured = state.capture.packets_captured;
+        self.scan_capture_screen.last_saved_capture_path = state.capture.last_saved_capture_path;
+
+        if let Some(path) = self.scan_capture_screen.last_saved_capture_path.clone() {
+            if self.scan_capture_screen.log_messages.is_empty() {
+                self.scan_capture_screen
+                    .log_messages
+                    .push(format!("✅ Last saved capture: {}", path));
+            }
+        }
+
+        if !state.crack.handshake_path.is_empty() {
+            self.crack_screen.handshake_path = state.crack.handshake_path;
+        }
+        self.crack_screen.use_captured_file = state.crack.use_captured_file;
+        self.crack_screen.ssid = state.crack.ssid;
+        self.crack_screen.engine = state.crack.engine;
+        self.crack_screen.method = state.crack.method;
+        if !state.crack.min_digits.is_empty() {
+            self.crack_screen.min_digits = state.crack.min_digits;
+        }
+        if !state.crack.max_digits.is_empty() {
+            self.crack_screen.max_digits = state.crack.max_digits;
+        }
+        if !state.crack.wordlist_path.is_empty() {
+            self.crack_screen.wordlist_path = state.crack.wordlist_path;
+        }
+        if state.crack.threads > 0 {
+            self.crack_screen.threads = state.crack.threads;
+        }
+    }
+
+    fn persist_state(&self) {
+        let state = PersistedState {
+            version: 1,
+            scan: PersistedScanState {
+                networks: self.scan_capture_screen.networks.clone(),
+                selected_network: self.scan_capture_screen.selected_network,
+                selected_interface: self.scan_capture_screen.selected_interface.clone(),
+            },
+            capture: PersistedCaptureState {
+                target_network: self.scan_capture_screen.target_network.clone(),
+                output_file: self.scan_capture_screen.output_file.clone(),
+                handshake_complete: self.scan_capture_screen.handshake_complete,
+                packets_captured: self.scan_capture_screen.packets_captured,
+                last_saved_capture_path: self.scan_capture_screen.last_saved_capture_path.clone(),
+            },
+            crack: PersistedCrackState {
+                handshake_path: self.crack_screen.handshake_path.clone(),
+                use_captured_file: self.crack_screen.use_captured_file,
+                ssid: self.crack_screen.ssid.clone(),
+                engine: self.crack_screen.engine,
+                method: self.crack_screen.method,
+                min_digits: self.crack_screen.min_digits.clone(),
+                max_digits: self.crack_screen.max_digits.clone(),
+                wordlist_path: self.crack_screen.wordlist_path.clone(),
+                threads: self.crack_screen.threads,
+            },
+        };
+
+        if let Err(err) = save_persisted_state(&state) {
+            eprintln!("[WARN] Failed to save state: {}", err);
+        }
+    }
+
+    fn build_relaunch_envs_for_capture(&self, auto_capture: bool) -> Vec<(&'static str, String)> {
+        let mut envs = Vec::new();
+        envs.push(("BRUTIFI_START_SCREEN", "scan".to_string()));
+        if auto_capture {
+            envs.push(("BRUTIFI_AUTO_CAPTURE", "1".to_string()));
+        }
+        envs
+    }
 }
 
 fn list_interfaces() -> Vec<String> {
@@ -907,6 +1287,32 @@ fn choose_default_interface(interfaces: &[String]) -> String {
         .first()
         .cloned()
         .unwrap_or_else(|| "en0".to_string())
+}
+
+fn state_file_path() -> Option<PathBuf> {
+    let home = std::env::var("HOME").ok()?;
+    if home.is_empty() {
+        return None;
+    }
+    let dir = PathBuf::from(home).join(".brutifi");
+    if fs::create_dir_all(&dir).is_err() {
+        return None;
+    }
+    Some(dir.join("state.json"))
+}
+
+fn load_persisted_state() -> Option<PersistedState> {
+    let path = state_file_path()?;
+    let data = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&data).ok()
+}
+
+fn save_persisted_state(state: &PersistedState) -> std::io::Result<()> {
+    if let Some(path) = state_file_path() {
+        let data = serde_json::to_string_pretty(state).unwrap_or_default();
+        fs::write(path, data)?;
+    }
+    Ok(())
 }
 
 /// Navigation button helper
