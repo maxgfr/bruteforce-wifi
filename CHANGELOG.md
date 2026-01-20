@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.12.0](https://github.com/maxgfr/brutifi/compare/v1.11.0...v1.12.0) (2026-01-20)
+
+
+### ✨ Features
+
+* external tool detection and improve WiFi handling ([8b2a5a8](https://github.com/maxgfr/brutifi/commit/8b2a5a8335059107d82eb9ee35eb1bd20c2c16cb))
+
 ## [1.11.0](https://github.com/maxgfr/brutifi/compare/v1.10.0...v1.11.0) (2026-01-20)
 
 
