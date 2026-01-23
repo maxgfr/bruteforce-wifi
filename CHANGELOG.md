@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.13.0](https://github.com/maxgfr/brutifi/compare/v1.12.0...v1.13.0) (2026-01-23)
+
+
+### ✨ Features
+
+* add Windows API support for DLL detection and improve logging functionality ([0c9baaf](https://github.com/maxgfr/brutifi/commit/0c9baafe3733720089fecb4a2fc11fec38966020))
+
 ## [1.12.0](https://github.com/maxgfr/brutifi/compare/v1.11.0...v1.12.0) (2026-01-20)
 
 
